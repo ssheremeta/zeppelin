@@ -18,6 +18,7 @@
 
 package org.apache.zeppelin.interpreter;
 
+import org.apache.zeppelin.conf.ZeppelinConfiguration;
 import org.apache.zeppelin.interpreter.remote.RemoteInterpreterProcess;
 import org.apache.zeppelin.scheduler.Job;
 import org.apache.zeppelin.scheduler.Scheduler;
@@ -65,7 +66,7 @@ public class ManagedInterpreterGroup extends InterpreterGroup {
         remoteInterpreterProcess = interpreterSetting.createInterpreterProcess(id, userName,
                 properties);
         remoteInterpreterProcess.start(userName);
-        interpreterSetting.getLifecycleManager().onInterpreterProcessStarted(this);
+        remoteInterpreterProcess.init(ZeppelinConfiguration.create());
         getInterpreterSetting().getRecoveryStorage()
                 .onInterpreterClientStart(remoteInterpreterProcess);
       }
@@ -147,9 +148,11 @@ public class ManagedInterpreterGroup extends InterpreterGroup {
     if (Boolean.parseBoolean(
             interpreter.getProperty("zeppelin.interpreter.close.cancel_job", "true"))) {
       for (final Job job : scheduler.getAllJobs()) {
-        job.abort();
-        job.setStatus(Job.Status.ABORT);
-        LOGGER.info("Job " + job.getJobName() + " aborted ");
+        if (!job.isTerminated()) {
+          job.abort();
+          job.setStatus(Job.Status.ABORT);
+          LOGGER.info("Job " + job.getJobName() + " aborted ");
+        }
       }
     } else {
       LOGGER.info("Keep job running while closing interpreter: " + interpreter.getClassName());

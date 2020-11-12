@@ -16,7 +16,7 @@
 FROM ubuntu:16.04
 MAINTAINER Apache Software Foundation <dev@zeppelin.apache.org>
 
-ENV Z_VERSION="0.9.0-preview1"
+ENV Z_VERSION="0.9.0-preview2"
 
 ENV LOG_TAG="[ZEPPELIN_${Z_VERSION}]:" \
     Z_HOME="/zeppelin" \
@@ -97,13 +97,6 @@ RUN echo "$LOG_TAG Install R related packages" && \
     R -e "install.packages('Rcpp', repos='http://cran.us.r-project.org')" && \
     Rscript -e "library('devtools'); library('Rcpp'); install_github('ramnathv/rCharts')"
 
-# Install kubectl
-RUN apt-get install -y apt-transport-https && \
-    curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add - && \
-    echo "deb https://apt.kubernetes.io/ kubernetes-xenial main" | tee -a /etc/apt/sources.list.d/kubernetes.list && \
-    apt-get update && \
-    apt-get install -y kubectl
-
 RUN echo "$LOG_TAG Cleanup" && \
     apt-get autoclean && \
     apt-get clean
@@ -124,6 +117,7 @@ RUN echo "$LOG_TAG Download Zeppelin binary" && \
     chmod 775 ${Z_HOME}
 
 COPY log4j.properties ${Z_HOME}/conf/
+COPY log4j_docker.properties ${Z_HOME}/conf/
 
 USER 1000
 

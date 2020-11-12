@@ -24,12 +24,8 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThat;
 
 import com.google.gson.Gson;
-import com.google.gson.internal.StringMap;
 import com.google.gson.reflect.TypeToken;
 
-import org.apache.commons.httpclient.methods.GetMethod;
-import org.apache.commons.httpclient.methods.PostMethod;
-import org.apache.commons.httpclient.methods.PutMethod;
 import org.apache.zeppelin.interpreter.InterpreterSetting;
 import org.apache.zeppelin.interpreter.InterpreterSettingManager;
 import org.apache.zeppelin.notebook.Notebook;
@@ -44,11 +40,15 @@ import org.junit.Test;
 import org.junit.runners.MethodSorters;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.util.EntityUtils;
 import org.apache.zeppelin.interpreter.InterpreterResult;
 import org.apache.zeppelin.notebook.Note;
 import org.apache.zeppelin.notebook.Paragraph;
@@ -89,15 +89,16 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
 
       String paragraphId = note1.getLastParagraph().getId();
 
-      GetMethod get = httpGet("/notebook/job/" + note1.getId() + "/" + paragraphId);
+      CloseableHttpResponse get = httpGet("/notebook/job/" + note1.getId() + "/" + paragraphId);
       assertThat(get, isAllowed());
-      Map<String, Object> resp = gson.fromJson(get.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(EntityUtils.toString(get.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
       Map<String, Set<String>> paragraphStatus = (Map<String, Set<String>>) resp.get("body");
 
       // Check id and status have proper value
       assertEquals(paragraphStatus.get("id"), paragraphId);
       assertEquals(paragraphStatus.get("status"), "READY");
+      get.close();
     } finally {
       // cleanup
       if (null != note1) {
@@ -107,7 +108,7 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
   }
 
   @Test
-  public void testRunParagraphJob() throws IOException {
+  public void testRunParagraphJob() throws Exception {
     LOG.info("Running testRunParagraphJob");
     Note note1 = null;
     try {
@@ -117,23 +118,25 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       Paragraph p = note1.addNewParagraph(AuthenticationInfo.ANONYMOUS);
 
       // run blank paragraph
-      PostMethod post = httpPost("/notebook/job/" + note1.getId() + "/" + p.getId() + "?blocking=true", "");
+      CloseableHttpResponse post = httpPost("/notebook/job/" + note1.getId() + "/" + p.getId(), "");
       assertThat(post, isAllowed());
-      Map<String, Object> resp = gson.fromJson(post.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "OK");
-      post.releaseConnection();
-      assertEquals(p.getStatus(), Job.Status.FINISHED);
+      assertEquals("OK", resp.get("status"));
+      post.close();
+      p.waitUntilFinished();
+      assertEquals(Job.Status.FINISHED, p.getStatus());
 
       // run non-blank paragraph
       p.setText("test");
-      post = httpPost("/notebook/job/" + note1.getId() + "/" + p.getId() + "?blocking=true", "");
+      post = httpPost("/notebook/job/" + note1.getId() + "/" + p.getId(), "");
       assertThat(post, isAllowed());
-      resp = gson.fromJson(post.getResponseBodyAsString(),
+      resp = gson.fromJson(EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "OK");
-      post.releaseConnection();
-      assertNotEquals(p.getStatus(), Job.Status.READY);
+      assertEquals("OK", resp.get("status"));
+      post.close();
+      p.waitUntilFinished();
+      assertNotEquals(p.getStatus(), Job.Status.FINISHED);
     } finally {
       // cleanup
       if (null != note1) {
@@ -158,12 +161,12 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       p.setTitle(title);
       p.setText(text);
 
-      PostMethod post = httpPost("/notebook/run/" + note1.getId() + "/" + p.getId(), "");
+      CloseableHttpResponse post = httpPost("/notebook/run/" + note1.getId() + "/" + p.getId(), "");
       assertThat(post, isAllowed());
-      Map<String, Object> resp = gson.fromJson(post.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8),
           new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "OK");
-      post.releaseConnection();
+      assertEquals("OK", resp.get("status"));
+      post.close();
       assertNotEquals(p.getStatus(), Job.Status.READY);
 
       // Check if the paragraph is emptied
@@ -176,16 +179,16 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       p.setText(text);
 
       post = httpPost("/notebook/run/" + note1.getId() + "/" + p.getId(), "");
-      assertEquals(500, post.getStatusCode());
-      resp = gson.fromJson(post.getResponseBodyAsString(),
+      assertEquals(200, post.getStatusLine().getStatusCode());
+      resp = gson.fromJson(EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals("INTERNAL_SERVER_ERROR", resp.get("status"));
-      StringMap stringMap = (StringMap) resp.get("body");
+      assertEquals("OK", resp.get("status"));
+      Map stringMap = (Map) resp.get("body");
       assertEquals("ERROR", stringMap.get("code"));
-      List<StringMap> interpreterResults = (List<StringMap>) stringMap.get("msg");
+      List<Map> interpreterResults = (List<Map>) stringMap.get("msg");
       assertTrue(interpreterResults.get(0).toString(),
               interpreterResults.get(0).get("data").toString().contains("invalid_cmd: command not found"));
-      post.releaseConnection();
+      post.close();
       assertNotEquals(p.getStatus(), Job.Status.READY);
 
       // Check if the paragraph is emptied
@@ -221,12 +224,12 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       p1.setText("%python from __future__ import print_function\nimport time\ntime.sleep(1)\nuser='abc'");
       p2.setText("%python print(user)");
 
-      PostMethod post = httpPost("/notebook/job/" + note1.getId() + "?blocking=true", "");
+      CloseableHttpResponse post = httpPost("/notebook/job/" + note1.getId() + "?blocking=true", "");
       assertThat(post, isAllowed());
-      Map<String, Object> resp = gson.fromJson(post.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "OK");
-      post.releaseConnection();
+      assertEquals("OK", resp.get("status"));
+      post.close();
 
       assertEquals(Job.Status.FINISHED, p1.getStatus());
       assertEquals(Job.Status.FINISHED, p2.getStatus());
@@ -261,12 +264,12 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       p1.setText("%python import time\ntime.sleep(5)\nname='hello'\nz.put('name', name)");
       p2.setText("%sh(interpolate=true) echo '{name}'");
 
-      PostMethod post = httpPost("/notebook/job/" + note1.getId() + "?blocking=true", "");
+      CloseableHttpResponse post = httpPost("/notebook/job/" + note1.getId() + "?blocking=true", "");
       assertThat(post, isAllowed());
-      Map<String, Object> resp = gson.fromJson(post.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "OK");
-      post.releaseConnection();
+      assertEquals("OK", resp.get("status"));
+      post.close();
 
       p1.waitUntilFinished();
       p2.waitUntilFinished();
@@ -309,12 +312,12 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       p1.setText("%python from __future__ import print_function\nimport time\ntime.sleep(1)\nuser='abc'");
       p2.setText("%python print(user)");
 
-      PostMethod post = httpPost("/notebook/job/" + note1.getId() + "?blocking=true&isolated=true", "");
+      CloseableHttpResponse post = httpPost("/notebook/job/" + note1.getId() + "?blocking=true&isolated=true", "");
       assertThat(post, isAllowed());
-      Map<String, Object> resp = gson.fromJson(post.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "OK");
-      post.releaseConnection();
+      assertEquals("OK", resp.get("status"));
+      post.close();
 
       assertEquals(Job.Status.FINISHED, p1.getStatus());
       assertEquals(Job.Status.FINISHED, p2.getStatus());
@@ -357,12 +360,12 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       p1.setText("%python from __future__ import print_function\nimport time\ntime.sleep(1)\nuser='abc'");
       p2.setText("%python print(user)");
 
-      PostMethod post = httpPost("/notebook/job/" + note1.getId() + "?blocking=false&isolated=true", "");
+      CloseableHttpResponse post = httpPost("/notebook/job/" + note1.getId() + "?blocking=false&isolated=true", "");
       assertThat(post, isAllowed());
-      Map<String, Object> resp = gson.fromJson(post.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "OK");
-      post.releaseConnection();
+      assertEquals("OK", resp.get("status"));
+      post.close();
 
       // wait for all the paragraphs are done
       while(note1.isRunning()) {
@@ -404,13 +407,13 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       Map<String, Object> paramsMap = new HashMap<>();
       paramsMap.put("name", "zeppelin");
       ParametersRequest parametersRequest = new ParametersRequest(paramsMap);
-      PostMethod post = httpPost("/notebook/job/" + note1.getId() + "?blocking=false&isolated=true&",
+      CloseableHttpResponse post = httpPost("/notebook/job/" + note1.getId() + "?blocking=false&isolated=true&",
               parametersRequest.toJson());
       assertThat(post, isAllowed());
-      Map<String, Object> resp = gson.fromJson(post.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "OK");
-      post.releaseConnection();
+      assertEquals("OK",resp.get("status"));
+      post.close();
 
       // wait for all the paragraphs are done
       while(note1.isRunning()) {
@@ -424,10 +427,10 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       // another attempt rest api call without params
       post = httpPost("/notebook/job/" + note1.getId() + "?blocking=false&isolated=true", "");
       assertThat(post, isAllowed());
-      resp = gson.fromJson(post.getResponseBodyAsString(),
+      resp = gson.fromJson(EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "OK");
-      post.releaseConnection();
+      assertEquals("OK", resp.get("status"));
+      post.close();
 
       // wait for all the paragraphs are done
       while(note1.isRunning()) {
@@ -469,17 +472,13 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       p1.setText("%python from __future__ import print_function\nimport time\ntime.sleep(1)\nprint(user2)");
       p2.setText("%python user2='abc'\nprint(user2)");
 
-      PostMethod post = httpPost("/notebook/job/" + note1.getId() + "?blocking=true", "");
-      assertThat(post, isExpectationFailed());
-      Map<String, Object> resp = gson.fromJson(post.getResponseBodyAsString(),
-              new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "EXPECTATION_FAILED");
-      assertTrue(resp.get("message").toString().contains("Fail to run note because paragraph"));
-      post.releaseConnection();
+      CloseableHttpResponse post = httpPost("/notebook/job/" + note1.getId() + "?blocking=true", "");
+      assertThat(post, isAllowed());
 
       assertEquals(Job.Status.ERROR, p1.getStatus());
       // p2 will be skipped because p1 is failed.
       assertEquals(Job.Status.READY, p2.getStatus());
+      post.close();
     } finally {
       // cleanup
       if (null != note1) {
@@ -495,22 +494,23 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
     String clonedNoteId = null;
     try {
       note1 = TestUtils.getInstance(Notebook.class).createNote("note1", anonymous);
-      PostMethod post = httpPost("/notebook/" + note1.getId(), "");
-      LOG.info("testCloneNote response\n" + post.getResponseBodyAsString());
+      CloseableHttpResponse post = httpPost("/notebook/" + note1.getId(), "");
+      String postResponse = EntityUtils.toString(post.getEntity(), StandardCharsets.UTF_8);
+      LOG.info("testCloneNote response\n" + postResponse);
       assertThat(post, isAllowed());
-      Map<String, Object> resp = gson.fromJson(post.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(postResponse,
               new TypeToken<Map<String, Object>>() {}.getType());
       clonedNoteId = (String) resp.get("body");
-      post.releaseConnection();
+      post.close();
 
-      GetMethod get = httpGet("/notebook/" + clonedNoteId);
+      CloseableHttpResponse get = httpGet("/notebook/" + clonedNoteId);
       assertThat(get, isAllowed());
-      Map<String, Object> resp2 = gson.fromJson(get.getResponseBodyAsString(),
+      Map<String, Object> resp2 = gson.fromJson(EntityUtils.toString(get.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
       Map<String, Object> resp2Body = (Map<String, Object>) resp2.get("body");
 
       //    assertEquals(resp2Body.get("name"), "Note " + clonedNoteId);
-      get.releaseConnection();
+      get.close();
     } finally {
       // cleanup
       if (null != note1) {
@@ -538,9 +538,9 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       final String newName = "testName";
       String jsonRequest = "{\"name\": " + newName + "}";
 
-      PutMethod put = httpPut("/notebook/" + noteId + "/rename/", jsonRequest);
+      CloseableHttpResponse put = httpPut("/notebook/" + noteId + "/rename/", jsonRequest);
       assertThat("test testRenameNote:", put, isAllowed());
-      put.releaseConnection();
+      put.close();
 
       assertEquals(note.getName(), newName);
     } finally {
@@ -563,15 +563,15 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       String paragraphId = p.getId();
       String jsonRequest = "{\"colWidth\": 6.0}";
 
-      PutMethod put = httpPut("/notebook/" + noteId + "/paragraph/" + paragraphId + "/config",
+      CloseableHttpResponse put = httpPut("/notebook/" + noteId + "/paragraph/" + paragraphId + "/config",
               jsonRequest);
       assertThat("test testUpdateParagraphConfig:", put, isAllowed());
 
-      Map<String, Object> resp = gson.fromJson(put.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(EntityUtils.toString(put.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
       Map<String, Object> respBody = (Map<String, Object>) resp.get("body");
       Map<String, Object> config = (Map<String, Object>) respBody.get("config");
-      put.releaseConnection();
+      put.close();
 
       assertEquals(config.get("colWidth"), 6.0);
       note = TestUtils.getInstance(Notebook.class).getNote(noteId);
@@ -600,26 +600,27 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       p2.setReturn(result, new Throwable());
 
       // clear paragraph result
-      PutMethod put = httpPut("/notebook/" + note.getId() + "/clear", "");
-      LOG.info("test clear paragraph output response\n" + put.getResponseBodyAsString());
+      CloseableHttpResponse put = httpPut("/notebook/" + note.getId() + "/clear", "");
+      LOG.info("test clear paragraph output response\n" + EntityUtils.toString(put.getEntity(), StandardCharsets.UTF_8));
       assertThat(put, isAllowed());
-      put.releaseConnection();
+      put.close();
 
       // check if paragraph results are cleared
-      GetMethod get = httpGet("/notebook/" + note.getId() + "/paragraph/" + p1.getId());
+      CloseableHttpResponse get = httpGet("/notebook/" + note.getId() + "/paragraph/" + p1.getId());
       assertThat(get, isAllowed());
-      Map<String, Object> resp1 = gson.fromJson(get.getResponseBodyAsString(),
+      Map<String, Object> resp1 = gson.fromJson(EntityUtils.toString(get.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
       Map<String, Object> resp1Body = (Map<String, Object>) resp1.get("body");
       assertNull(resp1Body.get("result"));
+      get.close();
 
       get = httpGet("/notebook/" + note.getId() + "/paragraph/" + p2.getId());
       assertThat(get, isAllowed());
-      Map<String, Object> resp2 = gson.fromJson(get.getResponseBodyAsString(),
+      Map<String, Object> resp2 = gson.fromJson(EntityUtils.toString(get.getEntity(), StandardCharsets.UTF_8),
               new TypeToken<Map<String, Object>>() {}.getType());
       Map<String, Object> resp2Body = (Map<String, Object>) resp2.get("body");
       assertNull(resp2Body.get("result"));
-      get.releaseConnection();
+      get.close();
     } finally {
       // cleanup
       if (null != note) {
@@ -650,13 +651,13 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       p1.setText("%python from __future__ import print_function\nimport time\ntime.sleep(1)\nuser='abc'");
       p2.setText("%python print(user)");
 
-      PostMethod post1 = httpPost("/notebook/job/" + note1.getId() + "?blocking=true", "");
+      CloseableHttpResponse post1 = httpPost("/notebook/job/" + note1.getId() + "?blocking=true", "");
       assertThat(post1, isAllowed());
-      post1.releaseConnection();
-      PutMethod put = httpPut("/notebook/" + note1.getId() + "/clear", "");
-      LOG.info("test clear paragraph output response\n" + put.getResponseBodyAsString());
+      post1.close();
+      CloseableHttpResponse put = httpPut("/notebook/" + note1.getId() + "/clear", "");
+      LOG.info("test clear paragraph output response\n" + EntityUtils.toString(put.getEntity(), StandardCharsets.UTF_8));
       assertThat(put, isAllowed());
-      put.releaseConnection();
+      put.close();
 
       // restart server (while keeping interpreter configuration)
       AbstractTestRestApi.shutDown(false);
@@ -666,12 +667,12 @@ public class NotebookRestApiTest extends AbstractTestRestApi {
       p1 = note1.getParagraph(p1.getId());
       p2 = note1.getParagraph(p2.getId());
 
-      PostMethod post2 = httpPost("/notebook/job/" + note1.getId() + "?blocking=true", "");
+      CloseableHttpResponse post2 = httpPost("/notebook/job/" + note1.getId() + "?blocking=true", "");
       assertThat(post2, isAllowed());
-      Map<String, Object> resp = gson.fromJson(post2.getResponseBodyAsString(),
+      Map<String, Object> resp = gson.fromJson(EntityUtils.toString(post2.getEntity(), StandardCharsets.UTF_8),
           new TypeToken<Map<String, Object>>() {}.getType());
-      assertEquals(resp.get("status"), "OK");
-      post2.releaseConnection();
+      assertEquals("OK", resp.get("status"));
+      post2.close();
 
       assertEquals(Job.Status.FINISHED, p1.getStatus());
       assertEquals(p2.getReturn().toString(), Job.Status.FINISHED, p2.getStatus());

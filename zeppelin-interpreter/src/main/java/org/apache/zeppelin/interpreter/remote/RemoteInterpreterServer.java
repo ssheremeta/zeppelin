@@ -22,12 +22,8 @@ import com.google.gson.reflect.TypeToken;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.thrift.TException;
-import org.apache.thrift.protocol.TBinaryProtocol;
-import org.apache.thrift.protocol.TProtocol;
 import org.apache.thrift.server.TThreadPoolServer;
 import org.apache.thrift.transport.TServerSocket;
-import org.apache.thrift.transport.TSocket;
-import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportException;
 import org.apache.zeppelin.cluster.ClusterManagerClient;
 import org.apache.zeppelin.cluster.meta.ClusterMeta;
@@ -57,11 +53,11 @@ import org.apache.zeppelin.interpreter.InterpreterResult.Code;
 import org.apache.zeppelin.interpreter.InterpreterResultMessage;
 import org.apache.zeppelin.interpreter.InterpreterResultMessageOutput;
 import org.apache.zeppelin.interpreter.LazyOpenInterpreter;
+import org.apache.zeppelin.interpreter.LifecycleManager;
 import org.apache.zeppelin.interpreter.thrift.InterpreterCompletion;
 import org.apache.zeppelin.interpreter.thrift.RegisterInfo;
 import org.apache.zeppelin.interpreter.thrift.RemoteApplicationResult;
 import org.apache.zeppelin.interpreter.thrift.RemoteInterpreterContext;
-import org.apache.zeppelin.interpreter.thrift.RemoteInterpreterEventService;
 import org.apache.zeppelin.interpreter.thrift.RemoteInterpreterResult;
 import org.apache.zeppelin.interpreter.thrift.RemoteInterpreterResultMessage;
 import org.apache.zeppelin.interpreter.thrift.RemoteInterpreterService;
@@ -69,6 +65,7 @@ import org.apache.zeppelin.resource.DistributedResourcePool;
 import org.apache.zeppelin.resource.Resource;
 import org.apache.zeppelin.resource.ResourcePool;
 import org.apache.zeppelin.resource.ResourceSet;
+import org.apache.zeppelin.scheduler.ExecutorFactory;
 import org.apache.zeppelin.scheduler.Job;
 import org.apache.zeppelin.scheduler.Job.Status;
 import org.apache.zeppelin.scheduler.JobListener;
@@ -77,9 +74,6 @@ import org.apache.zeppelin.scheduler.SchedulerFactory;
 import org.apache.zeppelin.user.AuthenticationInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import sun.misc.Signal;
-import sun.misc.SignalHandler;
-
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
@@ -111,7 +105,9 @@ import static org.apache.zeppelin.cluster.meta.ClusterMetaType.INTP_PROCESS_META
 public class RemoteInterpreterServer extends Thread
     implements RemoteInterpreterService.Iface {
 
-  private static Logger LOGGER = LoggerFactory.getLogger(RemoteInterpreterServer.class);
+  private static final Logger LOGGER = LoggerFactory.getLogger(RemoteInterpreterServer.class);
+
+  private static final int DEFAULT_SHUTDOWN_TIMEOUT = 2000;
 
   private String interpreterGroupId;
   private InterpreterGroup interpreterGroup;
@@ -129,13 +125,10 @@ public class RemoteInterpreterServer extends Thread
   private TThreadPoolServer server;
   RemoteInterpreterEventClient intpEventClient;
   private DependencyResolver depLoader;
+  private LifecycleManager lifecycleManager;
 
   private final Map<String, RunningApplication> runningApplications =
       Collections.synchronizedMap(new HashMap<String, RunningApplication>());
-
-  private Map<String, Object> remoteWorksResponsePool;
-
-  private final long DEFAULT_SHUTDOWN_TIMEOUT = 2000;
 
   // Hold information for manual progress update
   private ConcurrentMap<String, Integer> progressMap = new ConcurrentHashMap<>();
@@ -149,15 +142,16 @@ public class RemoteInterpreterServer extends Thread
 
   private boolean isTest;
 
+  private ZeppelinConfiguration zConf;
   // cluster manager client
-  private ZeppelinConfiguration zconf = ZeppelinConfiguration.create();
   private ClusterManagerClient clusterManagerClient;
+
+  private static Thread shutdownThread;
 
   public RemoteInterpreterServer(String intpEventServerHost,
                                  int intpEventServerPort,
                                  String interpreterGroupId,
-                                 String portRange)
-      throws IOException, TTransportException {
+                                 String portRange) throws Exception {
     this(intpEventServerHost, intpEventServerPort, portRange, interpreterGroupId, false);
   }
 
@@ -165,14 +159,16 @@ public class RemoteInterpreterServer extends Thread
                                  int intpEventServerPort,
                                  String portRange,
                                  String interpreterGroupId,
-                                 boolean isTest)
-      throws TTransportException, IOException {
-    LOGGER.info("Starting remote interpreter server on port {}, intpEventServerAddress: {}:{}", port,
-            intpEventServerHost, intpEventServerPort);
+                                 boolean isTest) throws Exception {
+    super("RemoteInterpreterServer-Thread");
     if (null != intpEventServerHost) {
       this.intpEventServerHost = intpEventServerHost;
       this.intpEventServerPort = intpEventServerPort;
+      this.port = RemoteInterpreterUtils.findAvailablePort(portRange);
+      this.host = RemoteInterpreterUtils.findAvailableHostAddress();
       if (!isTest) {
+        LOGGER.info("Starting remote interpreter server on port {}, intpEventServerAddress: {}:{}", port,
+          intpEventServerHost, intpEventServerPort);
         intpEventClient = new RemoteInterpreterEventClient(intpEventServerHost, intpEventServerPort);
       }
     } else {
@@ -181,150 +177,91 @@ public class RemoteInterpreterServer extends Thread
     }
     this.isTest = isTest;
     this.interpreterGroupId = interpreterGroupId;
-    RemoteInterpreterService.Processor<RemoteInterpreterServer> processor =
-        new RemoteInterpreterService.Processor<>(this);
-    TServerSocket serverTransport;
-    if (null == intpEventServerHost) {
-      // Dev Interpreter
-      serverTransport = new TServerSocket(intpEventServerPort);
-    } else {
-      serverTransport = RemoteInterpreterUtils.createTServerSocket(portRange);
-      this.port = serverTransport.getServerSocket().getLocalPort();
-      this.host = RemoteInterpreterUtils.findAvailableHostAddress();
-      LOGGER.info("Launching ThriftServer at " + this.host + ":" + this.port);
-    }
-    server = new TThreadPoolServer(
-        new TThreadPoolServer.Args(serverTransport).processor(processor));
-    remoteWorksResponsePool = Collections.synchronizedMap(new HashMap<String, Object>());
-
-    if (zconf.isClusterMode()) {
-      clusterManagerClient = ClusterManagerClient.getInstance(zconf);
-      clusterManagerClient.start(interpreterGroupId);
-    }
   }
 
   @Override
   public void run() {
-    if (null != intpEventServerHost && !isTest) {
-      new Thread(new Runnable() {
-        boolean interrupted = false;
+    RemoteInterpreterService.Processor<RemoteInterpreterServer> processor =
+      new RemoteInterpreterService.Processor<>(this);
+    try (TServerSocket tSocket = new TServerSocket(port)){
+      server = new TThreadPoolServer(
+      new TThreadPoolServer.Args(tSocket)
+        .stopTimeoutVal(DEFAULT_SHUTDOWN_TIMEOUT)
+        .stopTimeoutUnit(TimeUnit.MILLISECONDS)
+        .processor(processor));
 
-        @Override
-        public void run() {
-          while (!interrupted && !server.isServing()) {
-            try {
-              Thread.sleep(1000);
-            } catch (InterruptedException e) {
-              interrupted = true;
-            }
-          }
-
-          if (zconf.isClusterMode()) {
-            // Cluster mode, discovering interpreter processes through metadata registration
-            // TODO (Xun): Unified use of cluster metadata for process discovery of all operating modes
-            // 1. Can optimize the startup logic of the process
-            // 2. Can solve the problem that running the interpreter's IP in docker may be a virtual IP
-            putClusterMeta();
-          } else {
-            if (!interrupted) {
-              RegisterInfo registerInfo = new RegisterInfo(host, port, interpreterGroupId);
-              try {
-                LOGGER.info("Registering interpreter process");
-                intpEventClient.registerInterpreterProcess(registerInfo);
-                LOGGER.info("Registered interpreter process");
-              } catch (Exception e) {
-                LOGGER.error("Error while registering interpreter: {}", registerInfo, e);
-                try {
-                  shutdown();
-                } catch (TException e1) {
-                  LOGGER.warn("Exception occurs while shutting down", e1);
-                }
-              }
-            }
-          }
-
-          if (launcherEnv != null && "yarn".endsWith(launcherEnv)) {
-            try {
-              YarnUtils.register(host, port);
-              Thread thread = new Thread(() -> {
-                while(!Thread.interrupted() && server.isServing()) {
-                  YarnUtils.heartbeat();
-                  try {
-                    Thread.sleep(60 * 1000);
-                  } catch (InterruptedException e) {
-                    LOGGER.warn(e.getMessage(), e);
-                  }
-                }
-              });
-              thread.setName("RM-Heartbeat-Thread");
-              thread.start();
-            } catch (Exception e) {
-              LOGGER.error("Fail to register yarn app", e);
-            }
-          }
-        }
-      }).start();
+      if (null != intpEventServerHost && !isTest) {
+        Thread registerThread = new Thread(new RegisterRunnable());
+        registerThread.setName("RegisterThread");
+        registerThread.start();
+      }
+      LOGGER.info("Launching ThriftServer at {}:{}", this.host, this.port);
+      server.serve();
+    } catch (TTransportException e) {
+      LOGGER.error("Failure in TTransport", e);
     }
-    server.serve();
+    LOGGER.info("RemoteInterpreterServer-Thread finished");
+  }
+
+  @Override
+  public void init(Map<String, String> properties) throws TException {
+    this.zConf = ZeppelinConfiguration.create();
+    for (Map.Entry<String, String> entry : properties.entrySet()) {
+      this.zConf.setProperty(entry.getKey(), entry.getValue());
+    }
+
+    if (zConf.isClusterMode()) {
+      clusterManagerClient = ClusterManagerClient.getInstance(zConf);
+      clusterManagerClient.start(interpreterGroupId);
+
+      // Cluster mode, discovering interpreter processes through metadata registration
+      // TODO (Xun): Unified use of cluster metadata for process discovery of all operating modes
+      // 1. Can optimize the startup logic of the process
+      // 2. Can solve the problem that running the interpreter's IP in docker may be a virtual IP
+      putClusterMeta();
+    }
+
+    try {
+      lifecycleManager = createLifecycleManager();
+      lifecycleManager.onInterpreterProcessStarted(interpreterGroupId);
+    } catch (Exception e) {
+      throw new TException("Fail to create LifeCycleManager", e);
+    }
   }
 
   @Override
   public void shutdown() throws TException {
-    Thread shutDownThread = new Thread(() -> {
-      LOGGER.info("Shutting down...");
-      // delete interpreter cluster meta
-      deleteClusterMeta();
-
-      if (interpreterGroup != null) {
-        synchronized (interpreterGroup) {
-          for (List<Interpreter> session : interpreterGroup.values()) {
-            for (Interpreter interpreter : session) {
-              try {
-                interpreter.close();
-              } catch (InterpreterException e) {
-                LOGGER.warn("Fail to close interpreter", e);
-              }
-            }
-          }
-        }
+    // unRegisterInterpreterProcess should be a sync operation (outside of shutdown thread),
+    // otherwise it would cause data mismatch between zeppelin server & interpreter process.
+    // e.g. zeppelin server start a new interpreter process, while previous interpreter process
+    // uniregister it with the same interpreter group id: flink-shared-process.
+    if (intpEventClient != null) {
+      try {
+        LOGGER.info("Unregister interpreter process");
+        intpEventClient.unRegisterInterpreterProcess();
+      } catch (Exception e) {
+        LOGGER.error("Fail to unregister remote interpreter process", e);
       }
-      if (!isTest) {
-        SchedulerFactory.singleton().destroy();
+    }
+    if (shutdownThread != null) {
+      // no need to call shutdownhook twice
+      if (Runtime.getRuntime().removeShutdownHook(shutdownThread)) {
+        LOGGER.debug("ShutdownHook removed, because of a regular shutdown");
+      } else {
+        LOGGER.warn("The ShutdownHook could not be removed");
       }
+    }
 
-      if ("yarn".equals(launcherEnv)) {
-        try {
-          YarnUtils.unregister(true, "");
-        } catch (Exception e) {
-          LOGGER.error("Fail to unregister yarn app", e);
-        }
-      }
-
-      server.stop();
-
-      // server.stop() does not always finish server.serve() loop
-      // sometimes server.serve() is hanging even after server.stop() call.
-      // this case, need to force kill the process
-
-      long startTime = System.currentTimeMillis();
-      while (System.currentTimeMillis() - startTime < DEFAULT_SHUTDOWN_TIMEOUT &&
-              server.isServing()) {
-        try {
-          Thread.sleep(300);
-        } catch (InterruptedException e) {
-          LOGGER.info("Exception in RemoteInterpreterServer while shutdown, Thread.sleep", e);
-        }
-      }
-
-      if (server.isServing()) {
-        LOGGER.info("Force shutting down");
-        System.exit(0);
-      }
-
-      LOGGER.info("Shutting down");
-    }, "Shutdown-Thread");
-
+    Thread shutDownThread = new ShutdownThread(ShutdownThread.CAUSE_SHUTDOWN_CALL);
     shutDownThread.start();
+  }
+
+  public ZeppelinConfiguration getConf() {
+    return this.zConf;
+  }
+
+  public LifecycleManager getLifecycleManager() {
+    return this.lifecycleManager;
   }
 
   public int getPort() {
@@ -339,8 +276,15 @@ public class RemoteInterpreterServer extends Thread
     }
   }
 
-  public static void main(String[] args)
-      throws TTransportException, InterruptedException, IOException {
+  private LifecycleManager createLifecycleManager() throws Exception {
+    String lifecycleManagerClass = zConf.getLifecycleManagerClass();
+    Class<?> clazz = Class.forName(lifecycleManagerClass);
+    LOGGER.info("Creating interpreter lifecycle manager: {}", lifecycleManagerClass);
+    return (LifecycleManager) clazz.getConstructor(ZeppelinConfiguration.class, RemoteInterpreterServer.class)
+            .newInstance(zConf, this);
+  }
+
+  public static void main(String[] args) throws Exception {
     String zeppelinServerHost = null;
     int port = Constants.ZEPPELIN_INTERPRETER_DEFAUlT_PORT;
     String portRange = ":";
@@ -357,27 +301,27 @@ public class RemoteInterpreterServer extends Thread
         new RemoteInterpreterServer(zeppelinServerHost, port, interpreterGroupId, portRange);
     remoteInterpreterServer.start();
 
-    // add signal handler
-    Signal.handle(new Signal("TERM"), new SignalHandler() {
-      @Override
-      public void handle(Signal signal) {
-        try {
-          LOGGER.info("Receive TERM Signal");
-          remoteInterpreterServer.shutdown();
-        } catch (TException e) {
-          LOGGER.error("Error on shutdown RemoteInterpreterServer", e);
-        }
-      }
-    });
+    /*
+     * Registration of a ShutdownHook in case of an unpredictable system call
+     * Examples: STRG+C, SIGTERM via kill
+     */
+    shutdownThread = remoteInterpreterServer.new ShutdownThread(ShutdownThread.CAUSE_SHUTDOWN_HOOK);
+    Runtime.getRuntime().addShutdownHook(shutdownThread);
 
     remoteInterpreterServer.join();
     LOGGER.info("RemoteInterpreterServer thread is finished");
+
+    /* TODO(pdallig): Remove System.exit(0) if the thrift server can be shut down successfully.
+     * https://github.com/apache/thrift/commit/9cb1c794cd39cfb276771f8e52f0306eb8d462fd
+     * should be part of the next release and solve the problem.
+     * We may have other threads that are not terminated successfully.
+     */
     System.exit(0);
   }
 
   // Submit interpreter process metadata information to cluster metadata
   private void putClusterMeta() {
-    if (!zconf.isClusterMode()){
+    if (!zConf.isClusterMode()){
       return;
     }
     String nodeName = clusterManagerClient.getClusterNodeName();
@@ -393,20 +337,6 @@ public class RemoteInterpreterServer extends Thread
     meta.put(ClusterMeta.STATUS, ClusterMeta.ONLINE_STATUS);
 
     clusterManagerClient.putClusterMeta(INTP_PROCESS_META, interpreterGroupId, meta);
-  }
-
-  private void deleteClusterMeta() {
-    if (!zconf.isClusterMode()){
-      return;
-    }
-
-    try {
-      // delete interpreter cluster meta
-      clusterManagerClient.deleteClusterMeta(INTP_PROCESS_META, interpreterGroupId);
-      Thread.sleep(300);
-    } catch (InterruptedException e) {
-      LOGGER.error(e.getMessage(), e);
-    }
   }
 
   @Override
@@ -509,7 +439,7 @@ public class RemoteInterpreterServer extends Thread
 
   @Override
   public void open(String sessionId, String className) throws TException {
-    LOGGER.info(String.format("Open Interpreter %s for session %s ", className, sessionId));
+    LOGGER.info("Open Interpreter {} for session {}", className, sessionId);
     Interpreter intp = getInterpreter(sessionId, className);
     try {
       intp.open();
@@ -592,6 +522,8 @@ public class RemoteInterpreterServer extends Thread
     if (LOGGER.isDebugEnabled()) {
       LOGGER.debug("st:\n{}", st);
     }
+    lifecycleManager.onInterpreterUse(interpreterGroupId);
+
     Interpreter intp = getInterpreter(sessionId, className);
     InterpreterContext context = convert(interpreterContext);
     context.setInterpreterClassName(intp.getClassName());
@@ -600,8 +532,8 @@ public class RemoteInterpreterServer extends Thread
     boolean isRecover = Boolean.parseBoolean(
             context.getLocalProperties().getOrDefault("isRecover", "false"));
     if (isRecover) {
-      LOGGER.info("Recovering paragraph: " + context.getParagraphId() + " of note: "
-              + context.getNoteId());
+      LOGGER.info("Recovering paragraph: {} of note: {}",
+              context.getParagraphId(), context.getNoteId());
       interpretJob = runningJobs.get(context.getParagraphId());
       if (interpretJob == null) {
         InterpreterResult result = new InterpreterResult(Code.ERROR, "Job is finished, unable to recover it");
@@ -649,6 +581,144 @@ public class RemoteInterpreterServer extends Thread
             context.getConfig(),
             context.getGui(),
             context.getNoteGui());
+  }
+
+  class RegisterRunnable implements Runnable {
+
+    @Override
+    public void run() {
+      LOGGER.info("Start registration");
+      // wait till the server is serving
+      while (!Thread.currentThread().isInterrupted() && server != null && !server.isServing()) {
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException e) {
+          LOGGER.info("InterruptedException received", e);
+          Thread.currentThread().interrupt();
+        }
+      }
+      if (!Thread.currentThread().isInterrupted()) {
+        RegisterInfo registerInfo = new RegisterInfo(host, port, interpreterGroupId);
+        try {
+          LOGGER.info("Registering interpreter process");
+          intpEventClient.registerInterpreterProcess(registerInfo);
+          LOGGER.info("Registered interpreter process");
+        } catch (Exception e) {
+          LOGGER.error("Error while registering interpreter: {}, cause: {}", registerInfo, e);
+          try {
+            shutdown();
+          } catch (TException e1) {
+            LOGGER.warn("Exception occurs while shutting down", e1);
+          }
+        }
+      }
+
+      if (launcherEnv != null && "yarn".endsWith(launcherEnv)) {
+        try {
+          YarnUtils.register(host, port);
+          ScheduledExecutorService yarnHeartbeat = ExecutorFactory.singleton()
+            .createOrGetScheduled("RM-Heartbeat", 1);
+          yarnHeartbeat.scheduleAtFixedRate(YarnUtils::heartbeat, 0, 1, TimeUnit.MINUTES);
+        } catch (Exception e) {
+          LOGGER.error("Fail to register yarn app", e);
+        }
+      }
+      LOGGER.info("Registration finished");
+    }
+  }
+
+  class ShutdownThread extends Thread {
+    private final String cause;
+
+    public static final String CAUSE_SHUTDOWN_HOOK = "ShutdownHook";
+    public static final String CAUSE_SHUTDOWN_CALL = "ShutdownCall";
+
+    public ShutdownThread(String cause) {
+      super("ShutdownThread");
+      this.cause = cause;
+    }
+
+    @Override
+    public void run() {
+      LOGGER.info("Shutting down...");
+      LOGGER.info("Shutdown initialized by {}", cause);
+      // delete interpreter cluster meta
+      deleteClusterMeta();
+
+      if (interpreterGroup != null) {
+        synchronized (interpreterGroup) {
+          for (List<Interpreter> session : interpreterGroup.values()) {
+            for (Interpreter interpreter : session) {
+              try {
+                interpreter.close();
+              } catch (InterpreterException e) {
+                LOGGER.warn("Fail to close interpreter", e);
+              }
+            }
+          }
+        }
+      }
+      if (!isTest) {
+        SchedulerFactory.singleton().destroy();
+        ExecutorFactory.singleton().shutdownAll();
+      }
+
+      if ("yarn".equals(launcherEnv)) {
+        try {
+          YarnUtils.unregister(true, "");
+        } catch (Exception e) {
+          LOGGER.error("Fail to unregister yarn app", e);
+        }
+      }
+      // Try to unregister the interpreter process in case the interpreter process exit unpredictable via ShutdownHook
+      if (intpEventClient != null && CAUSE_SHUTDOWN_HOOK.equals(cause)) {
+        try {
+          LOGGER.info("Unregister interpreter process");
+          intpEventClient.unRegisterInterpreterProcess();
+        } catch (Exception e) {
+          LOGGER.error("Fail to unregister remote interpreter process", e);
+        }
+      }
+
+      server.stop();
+
+      // server.stop() does not always finish server.serve() loop
+      // sometimes server.serve() is hanging even after server.stop() call.
+      // this case, need to force kill the process
+
+      long startTime = System.currentTimeMillis();
+      while (System.currentTimeMillis() - startTime < (DEFAULT_SHUTDOWN_TIMEOUT + 100) &&
+              server.isServing()) {
+        try {
+          Thread.sleep(300);
+        } catch (InterruptedException e) {
+          LOGGER.info("Exception in RemoteInterpreterServer while shutdown, Thread.sleep", e);
+          Thread.currentThread().interrupt();
+        }
+      }
+
+      if (server.isServing()) {
+        LOGGER.info("Force shutting down");
+        System.exit(1);
+      }
+
+      LOGGER.info("Shutting down");
+    }
+
+    private void deleteClusterMeta() {
+      if (zConf == null || !zConf.isClusterMode()){
+        return;
+      }
+
+      try {
+        // delete interpreter cluster meta
+        clusterManagerClient.deleteClusterMeta(INTP_PROCESS_META, interpreterGroupId);
+        Thread.sleep(300);
+      } catch (InterruptedException e) {
+        LOGGER.error(e.getMessage(), e);
+        Thread.currentThread().interrupt();
+      }
+    }
   }
 
   class InterpretJobListener implements JobListener {
@@ -772,7 +842,7 @@ public class RemoteInterpreterServer extends Thread
           //     global_post_hook
           processInterpreterHooks(context.getNoteId());
           processInterpreterHooks(null);
-          LOGGER.debug("Script after hooks: " + script);
+          LOGGER.debug("Script after hooks: {}", script);
           result = interpreter.interpret(script, context);
         }
 
@@ -792,7 +862,7 @@ public class RemoteInterpreterServer extends Thread
           if (msg.getType() == InterpreterResult.Type.IMG) {
             LOGGER.debug("InterpreterResultMessage: IMAGE_DATA");
           } else {
-            LOGGER.debug("InterpreterResultMessage: " + msg.toString());
+            LOGGER.debug("InterpreterResultMessage: {}", msg);
           }
           stringResult.add(msg.getData());
         }
@@ -847,7 +917,7 @@ public class RemoteInterpreterServer extends Thread
         try {
           intp.cancel(convert(interpreterContext, null));
         } catch (InterpreterException e) {
-          LOGGER.error("Fail to cancel paragraph: " + interpreterContext.getParagraphId());
+          LOGGER.error("Fail to cancel paragraph: {}", interpreterContext.getParagraphId());
         }
       });
       thread.start();
@@ -858,14 +928,15 @@ public class RemoteInterpreterServer extends Thread
   public int getProgress(String sessionId, String className,
                          RemoteInterpreterContext interpreterContext)
       throws TException {
+    lifecycleManager.onInterpreterUse(interpreterGroupId);
+
     Integer manuallyProvidedProgress = progressMap.get(interpreterContext.getParagraphId());
     if (manuallyProvidedProgress != null) {
       return manuallyProvidedProgress;
     } else {
       Interpreter intp = getInterpreter(sessionId, className);
       if (intp == null) {
-        throw new TException("No interpreter {} existed for session {}".format(
-            className, sessionId));
+        throw new TException("No interpreter " + className + " existed for session " + sessionId);
       }
       try {
         return intp.getProgress(convert(interpreterContext, null));
@@ -985,6 +1056,8 @@ public class RemoteInterpreterServer extends Thread
   @Override
   public String getStatus(String sessionId, String jobId)
       throws TException {
+
+    lifecycleManager.onInterpreterUse(interpreterGroupId);
     if (interpreterGroup == null) {
       return Status.UNKNOWN.name();
     }
@@ -1253,7 +1326,7 @@ public class RemoteInterpreterServer extends Thread
       String applicationInstanceId, String packageInfo, String noteId, String paragraphId)
       throws TException {
     if (runningApplications.containsKey(applicationInstanceId)) {
-      LOGGER.warn("Application instance {} is already running");
+      LOGGER.warn("Application instance {} is already running", applicationInstanceId);
       return new RemoteApplicationResult(true, "");
     }
     HeliumPackage pkgInfo = HeliumPackage.fromJson(packageInfo);
@@ -1350,6 +1423,4 @@ public class RemoteInterpreterServer extends Thread
       this.paragraphId = paragraphId;
     }
   }
-
-  ;
 }

@@ -118,6 +118,8 @@ public class CassandraInterpreter extends Interpreter {
           "cassandra.format.float_precision";
   public static final String CASSANDRA_FORMAT_DOUBLE_PRECISION =
           "cassandra.format.double_precision";
+  public static final String CASSANDRA_FORMAT_DECIMAL_PRECISION =
+          "cassandra.format.decimal_precision";
   public static final String CASSANDRA_FORMAT_TIMESTAMP =
           "cassandra.format.timestamp";
   public static final String CASSANDRA_FORMAT_TIME =
@@ -152,7 +154,7 @@ public class CassandraInterpreter extends Interpreter {
   public static final String DEFAULT_TCP_NO_DELAY = "true";
   public static final String DEFAULT_MAX_SCHEMA_AGREEMENT_WAIT_SECONDS = "12";
 
-  static final List NO_COMPLETION = new ArrayList<>();
+  static final List<InterpreterCompletion> NO_COMPLETION = new ArrayList<>();
   public static final String DATASTAX_JAVA_DRIVER_PREFIX = "datastax-java-driver.";
   public static final String MILLISECONDS_STR = " milliseconds";
   public static final String SECONDS_STR = " seconds";
@@ -179,7 +181,7 @@ public class CassandraInterpreter extends Interpreter {
     Collection<InetSocketAddress> hosts = new ArrayList<>();
     for (String address : addresses) {
       if (!StringUtils.isBlank(address)) {
-        logger.debug("Adding contact point: {}", address);
+        LOGGER.debug("Adding contact point: {}", address);
         if (InetAddresses.isInetAddress(address)) {
           hosts.add(new InetSocketAddress(address, port));
         } else {
@@ -247,14 +249,14 @@ public class CassandraInterpreter extends Interpreter {
     LOGGER.debug("Session configuration");
     for (Map.Entry<String, Object> entry:
             session.getContext().getConfig().getDefaultProfile().entrySet()) {
-      logger.debug("{} = {}", entry.getKey(), entry.getValue().toString());
+      LOGGER.debug("{} = {}", entry.getKey(), entry.getValue().toString());
     }
     LOGGER.debug("Creating helper");
     helper = new InterpreterLogic(session, properties);
   }
 
   private DriverConfigLoader createLoader() {
-    logger.debug("Creating programmatic config loader");
+    LOGGER.debug("Creating programmatic config loader");
     // start generation of the config
     ProgrammaticDriverConfigLoaderBuilder configBuilder = DriverConfigLoader.programmaticBuilder();
 
@@ -339,12 +341,12 @@ public class CassandraInterpreter extends Interpreter {
     for (String pname: properties.stringPropertyNames()) {
       if (pname.startsWith(DATASTAX_JAVA_DRIVER_PREFIX)) {
         String pvalue = properties.getProperty(pname);
-        logger.info("Custom config values: {} = {}", pname, pvalue);
+        LOGGER.info("Custom config values: {} = {}", pname, pvalue);
         String shortName = pname.substring(DATASTAX_JAVA_DRIVER_PREFIX.length());
         if (optionMap.containsKey(shortName)) {
           allOptions.put(optionMap.get(shortName), pvalue);
         } else {
-          logger.warn("Incorrect option name: {}", pname);
+          LOGGER.warn("Incorrect option name: {}", pname);
         }
       }
     }
@@ -354,7 +356,7 @@ public class CassandraInterpreter extends Interpreter {
     }
 
     DriverConfigLoader loader = configBuilder.endProfile().build();
-    logger.debug("Config loader is created");
+    LOGGER.debug("Config loader is created");
 
     return loader;
   }

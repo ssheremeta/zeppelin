@@ -20,12 +20,6 @@
 <configuration>
 
 <property>
-  <name>zeppelin.cluster.addr</name>
-  <value></value>
-  <description>Server cluster address, eg. 127.0.0.1:6000,127.0.0.2:6000,127.0.0.3:6000</description>
-</property>
-
-<property>
   <name>zeppelin.server.addr</name>
   <value>127.0.0.1</value>
   <description>Server binding address</description>
@@ -35,6 +29,12 @@
   <name>zeppelin.server.port</name>
   <value>8080</value>
   <description>Server port.</description>
+</property>
+
+<property>
+  <name>zeppelin.cluster.addr</name>
+  <value></value>
+  <description>Server cluster address, eg. 127.0.0.1:6000,127.0.0.2:6000,127.0.0.3:6000</description>
 </property>
 
 <property>
@@ -59,6 +59,18 @@
   <name>zeppelin.notebook.dir</name>
   <value>notebook</value>
   <description>path or URI for notebook persist</description>
+</property>
+
+<property>
+  <name>zeppelin.interpreter.include</name>
+  <value></value>
+  <description>All the inteprreters that you would like to include. You can only specify either 'zeppelin.interpreter.include' or 'zeppelin.interpreter.exclude'. Specifying them together is not allowed.</description>
+</property>
+
+<property>
+  <name>zeppelin.interpreter.exclude</name>
+  <value></value>
+  <description>All the inteprreters that you would like to exclude. You can only specify either 'zeppelin.interpreter.include' or 'zeppelin.interpreter.exclude'. Specifying them together is not allowed.</description>
 </property>
 
 <property>
@@ -180,6 +192,15 @@
   <name>zeppelin.notebook.s3.sse</name>
   <value>true</value>
   <description>Server-side encryption enabled for notebooks</description>
+</property>
+-->
+
+<!-- Path style access for S3 bucket -->
+<!--
+<property>
+  <name>zeppelin.notebook.s3.pathStyleAccess</name>
+  <value>true</value>
+  <description>Path style access for S3 bucket</description>
 </property>
 -->
 
@@ -388,6 +409,14 @@
   <value>https://github.com/yarnpkg/yarn/releases/download/</value>
   <description>Remote Yarn package installer url for Helium dependency loader</description>
 </property>
+
+<!--
+<property>
+  <name>zeppelin.helium.registry</name>
+  <value>helium,https://s3.amazonaws.com/helium-package/helium.json</value>
+  <description>Location of external Helium Registry</description>
+</property>
+-->
 
 <property>
   <name>zeppelin.interpreter.group.default</name>
@@ -640,6 +669,21 @@
 
 <!--
 <property>
+  <name>zeppelin.server.html.body.addon</name>
+  <value><![CDATA[<script defer src="https://url/to/my/lib.min.js" /><script defer src="https://url/to/other/lib.min.js" />]]></value>
+  <description>Addon html code to be placed at the end of the html->body section in index.html delivered by zeppelin server.</description>
+</property>
+
+<property>
+  <name>zeppelin.server.html.head.addon</name>
+  <value></value>
+  <description>Addon html code to be placed at the end of the html->head section in index.html delivered by zeppelin server.</description>
+</property>
+-->
+
+
+<!--
+<property>
   <name>zeppelin.interpreter.callback.portRange</name>
   <value>10000:10010</value>
 </property>
@@ -648,8 +692,14 @@
 <!--
 <property>
   <name>zeppelin.recovery.storage.class</name>
+  <value>org.apache.zeppelin.interpreter.recovery.LocalRecoveryStorage</value>
+  <description>ReoveryStorage implementation based on java native local file system</description>
+</property>
+
+<property>
+  <name>zeppelin.recovery.storage.class</name>
   <value>org.apache.zeppelin.interpreter.recovery.FileSystemRecoveryStorage</value>
-  <description>ReoveryStorage implementation</description>
+  <description>ReoveryStorage implementation based on hadoop FileSystem</description>
 </property>
 -->
 

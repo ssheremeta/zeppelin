@@ -43,8 +43,10 @@ public class FlinkStreamSqlInterpreter extends FlinkSqlInterrpeter {
 
   @Override
   public void open() throws InterpreterException {
-    super.open();
+    this.flinkInterpreter =
+            getInterpreterInTheSameSessionByClassName(FlinkInterpreter.class);
     this.tbenv = flinkInterpreter.getJavaStreamTableEnvironment("blink");
+    super.open();
   }
 
   @Override
@@ -54,9 +56,6 @@ public class FlinkStreamSqlInterpreter extends FlinkSqlInterrpeter {
 
   @Override
   public void callInnerSelect(String sql, InterpreterContext context) throws IOException {
-    flinkInterpreter.setSavePointIfNecessary(context);
-    flinkInterpreter.setParallelismIfNecessary(context);
-
     String streamType = context.getLocalProperties().get("type");
     if (streamType == null) {
       throw new IOException("type must be specified for stream sql");

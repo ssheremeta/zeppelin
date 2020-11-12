@@ -168,15 +168,22 @@ public class NoteManager {
 
   /**
    * Save note to NoteManager, it won't check duplicates, this is used when updating note.
+   * Only save note in 2 cases:
+   *  1. Note is new created, isSaved is false
+   *  2. Note is in loaded state. Unload state means its content is empty.
    *
    * @param note
    * @param subject
    * @throws IOException
    */
   public void saveNote(Note note, AuthenticationInfo subject) throws IOException {
-    addOrUpdateNoteNode(note);
-    this.notebookRepo.save(note, subject);
-    note.setLoaded(true);
+    if (note.isLoaded() || !note.isSaved()) {
+      addOrUpdateNoteNode(note);
+      this.notebookRepo.save(note, subject);
+      note.setSaved(true);
+    } else {
+      LOGGER.warn("Try to save note: {} when it is unloaded", note.getId());
+    }
   }
 
   public void addNote(Note note, AuthenticationInfo subject) throws IOException {
@@ -282,13 +289,13 @@ public class NoteManager {
    * @return return null if not found on NotebookRepo.
    * @throws IOException
    */
-  public Note getNote(String noteId, boolean forceLoad) throws IOException {
+  public Note getNote(String noteId, boolean reload) throws IOException {
     String notePath = this.notesInfo.get(noteId);
     if (notePath == null) {
       return null;
     }
     NoteNode noteNode = getNoteNode(notePath);
-    return noteNode.getNote(forceLoad);
+    return noteNode.getNote(reload);
   }
 
   /**
@@ -535,7 +542,7 @@ public class NoteManager {
     }
 
     public synchronized Note getNote() throws IOException {
-        return getNote(true);
+        return getNote(false);
     }
 
     /**
@@ -544,8 +551,8 @@ public class NoteManager {
      * @return
      * @throws IOException
      */
-    public synchronized Note getNote(boolean forceLoad) throws IOException {
-      if (!note.isLoaded() && forceLoad) {
+    public synchronized Note getNote(boolean reload) throws IOException {
+      if (!note.isLoaded() || reload) {
         note = notebookRepo.get(note.getId(), note.getPath(), AuthenticationInfo.ANONYMOUS);
         if (parent.toString().equals("/")) {
           note.setPath("/" + note.getName());

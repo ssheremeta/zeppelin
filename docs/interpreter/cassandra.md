@@ -179,20 +179,11 @@ The complete list of all CQL statements and versions can be found below:
      </td>
    </tr>
    <tr>
-     <td><strong>2.1 & 2.0</strong></td>
+     <td><strong>2.1</strong></td>
      <td>
         <a target="_blank"
           href="http://docs.datastax.com/en/cql/3.1/cql/cql_intro_c.html">
           http://docs.datastax.com/en/cql/3.1/cql/cql_intro_c.html
-        </a>
-     </td>
-   </tr>
-   <tr>
-     <td><strong>1.2</strong></td>
-     <td>
-        <a target="_blank"
-          href="https://docs.datastax.com/en/archived/cql/3.1/cql/cql_intro_c.html">
-          https://docs.datastax.com/en/archived/cql/3.1/cql/cql_intro_c.html
         </a>
      </td>
    </tr>
@@ -453,12 +444,17 @@ Sometimes you want to be able to format output of your statement. Cassandra inte
    <tr>
      <td nowrap>Float precision</td>
      <td><strong>floatPrecision=<em>value</em></strong></td>
-     <td>Precision when formatting <tt>float</tt> values. Any positive integer value</td>
+     <td>Precision when formatting <tt>float</tt> values. Any positive integer value, or `-1` to show everything</td>
    </tr>
    <tr>
      <td nowrap>Double precision</td>
      <td><strong>doublePrecision=<em>value</em></strong></td>
-     <td>Precision when formatting <tt>double</tt> values. Any positive integer value</td>
+     <td>Precision when formatting <tt>double</tt> values. Any positive integer value, or `-1` to show everything</td>
+   </tr>
+   <tr>
+     <td nowrap>Decimal precision</td>
+     <td><strong>decimalPrecision=<em>value</em></strong></td>
+     <td>Precision when formatting <tt>decimal</tt> values. Any positive integer value, or `-1` to show everything</td>
    </tr>
    <tr>
      <td nowrap>Timestamp Format</td>
@@ -899,6 +895,11 @@ Below are the configuration parameters supported by interpreter and their defaul
      <td>Precision when formatting values of `double` type</td>
      <td>`12`</td>
    </tr>
+   <tr>
+     <td>`cassandra.format.decimal_precision`</td>
+     <td>Precision when formatting values of `decimal` type</td>
+     <td>`-1` (show everything)</td>
+   </tr>
  </table>
 
 Besides these parameters, it's also possible to set other driver parameters by adding them into interpreter configuration.  The configuration key should have full form with `datastax-java-driver` prefix, as [described in documentation](https://docs.datastax.com/en/developer/java-driver/latest/manual/core/configuration/).  For example, to specify 5 seconds request timeout, you can use `datastax-java-driver.basic.request.timeout` with value of `5 seconds`.  Full list of available configuration options is [available in documentation](https://docs.datastax.com/en/developer/java-driver/latest/manual/core/configuration/reference/).  Additional options may override the options that are specified by the interpreter's configuration parameters.
@@ -907,11 +908,13 @@ Besides these parameters, it's also possible to set other driver parameters by a
 
 **4.0** _(Zeppelin {{ site.ZEPPELIN_VERSION }})_ :
 
-* Refactor to use unified Java driver 4.5 ([ZEPPELIN-4378](https://issues.apache.org/jira/browse/ZEPPELIN-4378):
+* Refactor to use unified Java driver 4.7 ([ZEPPELIN-4378](https://issues.apache.org/jira/browse/ZEPPELIN-4378):
   * changes in configuration were necessary, as new driver has different architecture, and configuration options
   * interpreter got support for DSE-specific data types, and other extensions
   * support for `@retryPolicy` is removed, as only single retry policy is shipped with driver
-  * added support for formatting options, both interpreter & cell level
+  * allow to specify any configuration option of Java driver
+  * dropped support for Cassandra 1.2 & 2.0, that isn't supported by driver anymore
+* added support for formatting options, both interpreter & cell level
 
 **3.1** _(Zeppelin {{ site.ZEPPELIN_VERSION }})_ :
 

@@ -35,13 +35,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 
 public class RemoteInterpreterServerTest {
 
   @Test
-  public void testStartStop() throws InterruptedException, IOException, TException {
+  public void testStartStop() throws Exception {
     RemoteInterpreterServer server = new RemoteInterpreterServer("localhost",
         RemoteInterpreterUtils.findRandomAvailablePortOnAllLocalInterfaces(), ":", "groupId", true);
 
@@ -50,7 +51,7 @@ public class RemoteInterpreterServerTest {
   }
 
   @Test
-  public void testStartStopWithQueuedEvents() throws InterruptedException, IOException, TException {
+  public void testStartStopWithQueuedEvents() throws Exception {
     RemoteInterpreterServer server = new RemoteInterpreterServer("localhost",
         RemoteInterpreterUtils.findRandomAvailablePortOnAllLocalInterfaces(), ":", "groupId", true);
     server.intpEventClient = mock(RemoteInterpreterEventClient.class);
@@ -61,7 +62,7 @@ public class RemoteInterpreterServerTest {
   }
 
   private void startRemoteInterpreterServer(RemoteInterpreterServer server, int timeout)
-      throws InterruptedException {
+          throws InterruptedException, TException {
     assertEquals(false, server.isRunning());
     server.start();
     long startTime = System.currentTimeMillis();
@@ -74,6 +75,10 @@ public class RemoteInterpreterServerTest {
     assertEquals(true, server.isRunning());
     assertEquals(true, RemoteInterpreterUtils.checkIfRemoteEndpointAccessible("localhost",
         server.getPort()));
+
+    server.init(new HashMap<>());
+    assertNotNull(server.getConf());
+    assertNotNull(server.getLifecycleManager());
   }
 
   private void stopRemoteInterpreterServer(RemoteInterpreterServer server, int timeout)
@@ -93,9 +98,10 @@ public class RemoteInterpreterServerTest {
   }
 
   @Test
-  public void testInterpreter() throws IOException, TException, InterruptedException {
+  public void testInterpreter() throws Exception {
     final RemoteInterpreterServer server = new RemoteInterpreterServer("localhost",
         RemoteInterpreterUtils.findRandomAvailablePortOnAllLocalInterfaces(), ":", "groupId", true);
+    server.init(new HashMap<>());
     server.intpEventClient = mock(RemoteInterpreterEventClient.class);
 
     Map<String, String> intpProperties = new HashMap<>();

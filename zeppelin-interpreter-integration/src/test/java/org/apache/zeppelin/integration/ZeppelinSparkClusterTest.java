@@ -29,6 +29,7 @@ import org.apache.zeppelin.interpreter.InterpreterNotFoundException;
 import org.apache.zeppelin.interpreter.InterpreterProperty;
 import org.apache.zeppelin.interpreter.InterpreterResult;
 import org.apache.zeppelin.interpreter.InterpreterSetting;
+import org.apache.zeppelin.interpreter.InterpreterSettingManager;
 import org.apache.zeppelin.interpreter.integration.DownloadUtils;
 import org.apache.zeppelin.interpreter.thrift.InterpreterCompletion;
 import org.apache.zeppelin.notebook.Note;
@@ -55,6 +56,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -166,6 +168,12 @@ public abstract class ZeppelinSparkClusterTest extends AbstractTestRestApi {
           "import java.util.Date\n" +
           "import java.net.URL\n",
           p.getReturn().message().get(0).getData());
+
+      // check spark weburl in zeppelin-server side
+      InterpreterSettingManager interpreterSettingManager = TestUtils.getInstance(InterpreterSettingManager.class);
+      InterpreterSetting sparkInterpreterSetting = interpreterSettingManager.getByName("spark");
+      assertEquals(1, sparkInterpreterSetting.getAllInterpreterGroups().size());
+      assertNotNull(sparkInterpreterSetting.getAllInterpreterGroups().get(0).getWebUrl());
 
       p.setText("%spark invalid_code");
       note.run(p.getId(), true);
@@ -423,6 +431,11 @@ public abstract class ZeppelinSparkClusterTest extends AbstractTestRestApi {
       assertEquals(Status.FINISHED, p.getStatus());
       assertEquals("name_abc\n", p.getReturn().message().get(0).getData());
 
+      // test code completion
+      String code = "%spark.pyspark spark.";
+      List<InterpreterCompletion> completions = note.completion(p.getId(), code, code.length(), AuthenticationInfo.ANONYMOUS);
+      assertTrue(completions.size() > 0);
+
       if (isSpark1()) {
         // run sqlContext test
         p = note.addNewParagraph(anonymous);
@@ -574,7 +587,7 @@ public abstract class ZeppelinSparkClusterTest extends AbstractTestRestApi {
       p21.setText("%spark print(a)");
 
       // run p20 of note2 via paragraph in note1
-      p0.setText(String.format("%%spark z.run(\"%s\", \"%s\")", note2.getId(), p20.getId()));
+      p0.setText(String.format("%%spark.pyspark z.run(\"%s\", \"%s\")", note2.getId(), p20.getId()));
       note.run(p0.getId(), true);
       waitForFinish(p20);
       assertEquals(Status.FINISHED, p20.getStatus());
@@ -806,8 +819,15 @@ public abstract class ZeppelinSparkClusterTest extends AbstractTestRestApi {
       p1.setText("%spark z.angularBind(\"name\", \"world\")");
       note.run(p1.getId(), true);
       assertEquals(Status.FINISHED, p1.getStatus());
+      // angular object is saved to InterpreterGroup's AngularObjectRegistry
       List<AngularObject> angularObjects = p1.getBindedInterpreter().getInterpreterGroup()
               .getAngularObjectRegistry().getAll(note.getId(), null);
+      assertEquals(1, angularObjects.size());
+      assertEquals("name", angularObjects.get(0).getName());
+      assertEquals("world", angularObjects.get(0).get());
+
+      // angular object is saved to note as well.
+      angularObjects = note.getAngularObjects(p1.getBindedInterpreter().getInterpreterGroup().getId());
       assertEquals(1, angularObjects.size());
       assertEquals("name", angularObjects.get(0).getName());
       assertEquals("world", angularObjects.get(0).get());
@@ -821,6 +841,9 @@ public abstract class ZeppelinSparkClusterTest extends AbstractTestRestApi {
               .getAll(note.getId(), null);
       assertEquals(0, angularObjects.size());
 
+      angularObjects = note.getAngularObjects(p1.getBindedInterpreter().getInterpreterGroup().getId());
+      assertEquals(0, angularObjects.size());
+
       // add global angular object
       Paragraph p3 = note.addNewParagraph(anonymous);
       p3.setText("%spark z.angularBindGlobal(\"name2\", \"world2\")");
@@ -832,6 +855,10 @@ public abstract class ZeppelinSparkClusterTest extends AbstractTestRestApi {
       assertEquals("name2", globalAngularObjects.get(0).getName());
       assertEquals("world2", globalAngularObjects.get(0).get());
 
+      // global angular object is not saved to note
+      angularObjects = note.getAngularObjects(p1.getBindedInterpreter().getInterpreterGroup().getId());
+      assertEquals(0, angularObjects.size());
+
       // remove global angular object
       Paragraph p4 = note.addNewParagraph(anonymous);
       p4.setText("%spark z.angularUnbindGlobal(\"name2\")");
@@ -840,6 +867,10 @@ public abstract class ZeppelinSparkClusterTest extends AbstractTestRestApi {
       globalAngularObjects = p4.getBindedInterpreter().getInterpreterGroup()
               .getAngularObjectRegistry().getAll(note.getId(), null);
       assertEquals(0, globalAngularObjects.size());
+
+      // global angular object is not saved to note
+      angularObjects = note.getAngularObjects(p1.getBindedInterpreter().getInterpreterGroup().getId());
+      assertEquals(0, angularObjects.size());
     } finally {
       if (null != note) {
         TestUtils.getInstance(Notebook.class).removeNote(note, anonymous);
@@ -1020,6 +1051,20 @@ public abstract class ZeppelinSparkClusterTest extends AbstractTestRestApi {
       p1.setText("%spark\nimport com.databricks.spark.csv._");
       note.run(p1.getId(), true);
       assertEquals(Status.FINISHED, p1.getStatus());
+
+      // test pyspark imports path
+      Paragraph p2 = note.addNewParagraph(anonymous);
+      p2.setText("%spark.pyspark\nimport sys\nsys.path");
+      note.run(p2.getId(), true);
+      assertEquals(Status.FINISHED, p2.getStatus());
+      assertTrue(p2.getReturn().toString().contains("databricks_spark"));
+
+      Paragraph p3 = note.addNewParagraph(anonymous);
+      p3.setText("%spark.ipyspark\nimport sys\nsys.path");
+      note.run(p3.getId(), true);
+      assertEquals(Status.FINISHED, p3.getStatus());
+      assertTrue(p3.getReturn().toString().contains("databricks_spark"));
+
     } finally {
       if (null != note) {
         TestUtils.getInstance(Notebook.class).removeNote(note, anonymous);

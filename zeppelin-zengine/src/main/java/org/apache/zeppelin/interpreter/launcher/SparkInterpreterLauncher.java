@@ -78,6 +78,12 @@ public class SparkInterpreterLauncher extends StandardInterpreterLauncher {
       }
     }
 
+    // set spark.app.name if it is not set or empty
+    if (!sparkProperties.containsKey("spark.app.name") ||
+            StringUtils.isBlank(sparkProperties.getProperty("spark.app.name"))) {
+      sparkProperties.setProperty("spark.app.name", context.getInterpreterGroupId());
+    }
+
     setupPropertiesForPySpark(sparkProperties);
     setupPropertiesForSparkR(sparkProperties);
     if (isYarnMode() && getDeployMode().equals("cluster")) {
@@ -138,7 +144,7 @@ public class SparkInterpreterLauncher extends StandardInterpreterLauncher {
                         && jar.toFile().getName().endsWith(".jar"))
                 .map(jar -> jar.toAbsolutePath().toString())
                 .collect(Collectors.toList());
-        if (interpreterJars.size() == 0) {
+        if (interpreterJars.isEmpty()) {
           throw new IOException("zeppelin-interpreter-shaded jar is not found");
         } else if (interpreterJars.size() > 1) {
           throw new IOException("more than 1 zeppelin-interpreter-shaded jars are found: "
@@ -157,15 +163,17 @@ public class SparkInterpreterLauncher extends StandardInterpreterLauncher {
       }
     }
 
+    if (context.getOption().isUserImpersonate() && zConf.getZeppelinImpersonateSparkProxyUser()) {
+      sparkConfBuilder.append(" --proxy-user " + context.getUserName());
+      sparkProperties.remove("spark.yarn.keytab");
+      sparkProperties.remove("spark.yarn.principal");
+    }
+
     for (String name : sparkProperties.stringPropertyNames()) {
       sparkConfBuilder.append(" --conf " + name + "=" + sparkProperties.getProperty(name));
     }
 
-    if (context.getOption().isUserImpersonate() && zConf.getZeppelinImpersonateSparkProxyUser()) {
-      sparkConfBuilder.append(" --proxy-user " + context.getUserName());
-    }
-
-    env.put("ZEPPELIN_SPARK_CONF", escapeSpecialCharacter(sparkConfBuilder.toString()));
+    env.put("ZEPPELIN_SPARK_CONF", sparkConfBuilder.toString());
 
     // set these env in the order of
     // 1. interpreter-setting
@@ -179,9 +187,10 @@ public class SparkInterpreterLauncher extends StandardInterpreterLauncher {
       }
     }
 
-    String keytab = zConf.getString(ZeppelinConfiguration.ConfVars.ZEPPELIN_SERVER_KERBEROS_KEYTAB);
-    String principal =
-        zConf.getString(ZeppelinConfiguration.ConfVars.ZEPPELIN_SERVER_KERBEROS_PRINCIPAL);
+    String keytab = properties.getProperty("spark.yarn.keytab",
+            zConf.getString(ZeppelinConfiguration.ConfVars.ZEPPELIN_SERVER_KERBEROS_KEYTAB));
+    String principal = properties.getProperty("spark.yarn.principal",
+            zConf.getString(ZeppelinConfiguration.ConfVars.ZEPPELIN_SERVER_KERBEROS_PRINCIPAL));
 
     if (!StringUtils.isBlank(keytab) && !StringUtils.isBlank(principal)) {
       env.put("ZEPPELIN_SERVER_KERBEROS_KEYTAB", keytab);
@@ -193,7 +202,26 @@ public class SparkInterpreterLauncher extends StandardInterpreterLauncher {
     }
 
     env.put("PYSPARK_PIN_THREAD", "true");
-    LOGGER.debug("buildEnvFromProperties: " + env);
+
+    // ZEPPELIN_INTP_CLASSPATH
+    String sparkConfDir = getEnv("SPARK_CONF_DIR");
+    if (StringUtils.isBlank(sparkConfDir)) {
+      String sparkHome = getEnv("SPARK_HOME");
+      sparkConfDir = sparkHome + "/conf";
+    }
+    Properties sparkDefaultProperties = new Properties();
+    File sparkDefaultFile = new File(sparkConfDir, "spark-defaults.conf");
+    if (sparkDefaultFile.exists()) {
+      sparkDefaultProperties.load(new FileInputStream(sparkDefaultFile));
+      String driverExtraClassPath = sparkDefaultProperties.getProperty("spark.driver.extraClassPath");
+      if (!StringUtils.isBlank(driverExtraClassPath)) {
+        env.put("ZEPPELIN_INTP_CLASSPATH", driverExtraClassPath);
+      }
+    } else {
+      LOGGER.warn("spark-defaults.conf doesn't exist: {}", sparkDefaultFile.getAbsolutePath());
+    }
+
+    LOGGER.debug("buildEnvFromProperties: {}", env);
     return env;
 
   }

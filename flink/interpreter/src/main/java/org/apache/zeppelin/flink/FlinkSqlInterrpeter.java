@@ -26,30 +26,25 @@ import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.core.execution.JobListener;
-import org.apache.flink.python.PythonOptions;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
-import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import org.apache.zeppelin.flink.sql.SqlCommandParser;
 import org.apache.zeppelin.flink.sql.SqlCommandParser.SqlCommand;
+import org.apache.zeppelin.interpreter.AbstractInterpreter;
 import org.apache.zeppelin.interpreter.Interpreter;
 import org.apache.zeppelin.interpreter.InterpreterContext;
 import org.apache.zeppelin.interpreter.InterpreterException;
 import org.apache.zeppelin.interpreter.InterpreterResult;
+import org.apache.zeppelin.interpreter.ZeppelinContext;
 import org.apache.zeppelin.interpreter.util.SqlSplitter;
-import org.jline.utils.AttributedString;
-import org.jline.utils.AttributedStringBuilder;
-import org.jline.utils.AttributedStyle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.lang.reflect.Field;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -57,45 +52,19 @@ import java.util.Properties;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
-public abstract class FlinkSqlInterrpeter extends Interpreter {
+public abstract class FlinkSqlInterrpeter extends AbstractInterpreter {
 
   protected static final Logger LOGGER = LoggerFactory.getLogger(FlinkSqlInterrpeter.class);
 
-  public static final AttributedString MESSAGE_HELP = new AttributedStringBuilder()
-          .append("The following commands are available:\n\n")
-          .append(formatCommand(SqlCommand.CREATE_TABLE, "Create table under current catalog and database."))
-          .append(formatCommand(SqlCommand.DROP_TABLE, "Drop table with optional catalog and database. Syntax: 'DROP TABLE [IF EXISTS] <name>;'"))
-          .append(formatCommand(SqlCommand.CREATE_VIEW, "Creates a virtual table from a SQL query. Syntax: 'CREATE VIEW <name> AS <query>;'"))
-          .append(formatCommand(SqlCommand.DESCRIBE, "Describes the schema of a table with the given name."))
-          .append(formatCommand(SqlCommand.DROP_VIEW, "Deletes a previously created virtual table. Syntax: 'DROP VIEW <name>;'"))
-          .append(formatCommand(SqlCommand.EXPLAIN, "Describes the execution plan of a query or table with the given name."))
-          .append(formatCommand(SqlCommand.HELP, "Prints the available commands."))
-          .append(formatCommand(SqlCommand.INSERT_INTO, "Inserts the results of a SQL SELECT query into a declared table sink."))
-          .append(formatCommand(SqlCommand.INSERT_OVERWRITE, "Inserts the results of a SQL SELECT query into a declared table sink and overwrite existing data."))
-          .append(formatCommand(SqlCommand.SELECT, "Executes a SQL SELECT query on the Flink cluster."))
-          .append(formatCommand(SqlCommand.SET, "Sets a session configuration property. Syntax: 'SET <key>=<value>;'. Use 'SET;' for listing all properties."))
-          .append(formatCommand(SqlCommand.SHOW_FUNCTIONS, "Shows all user-defined and built-in functions."))
-          .append(formatCommand(SqlCommand.SHOW_TABLES, "Shows all registered tables."))
-          .append(formatCommand(SqlCommand.SOURCE, "Reads a SQL SELECT query from a file and executes it on the Flink cluster."))
-          .append(formatCommand(SqlCommand.USE_CATALOG, "Sets the current catalog. The current database is set to the catalog's default one. Experimental! Syntax: 'USE CATALOG <name>;'"))
-          .append(formatCommand(SqlCommand.USE, "Sets the current default database. Experimental! Syntax: 'USE <name>;'"))
-          .style(AttributedStyle.DEFAULT.underline())
-          .append("\nHint")
-          .style(AttributedStyle.DEFAULT)
-          .append(": Make sure that a statement ends with ';' for finalizing (multi-line) statements.")
-          .toAttributedString();
-
   protected FlinkInterpreter flinkInterpreter;
   protected TableEnvironment tbenv;
+  private SqlCommandParser sqlCommandParser;
   private SqlSplitter sqlSplitter;
   private int defaultSqlParallelism;
   private ReentrantReadWriteLock.WriteLock lock = new ReentrantReadWriteLock().writeLock();
   // all the available sql config options. see
   // https://ci.apache.org/projects/flink/flink-docs-release-1.10/dev/table/config.html
   private Map<String, ConfigOption> tableConfigOptions;
-  // represent paragraph's tableConfig
-  // paragraphId --> tableConfig
-  private Map<String, Map<String, String>> paragraphTableConfigMap = new HashMap<>();
 
   public FlinkSqlInterrpeter(Properties properties) {
     super(properties);
@@ -105,8 +74,7 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
 
   @Override
   public void open() throws InterpreterException {
-    flinkInterpreter =
-            getInterpreterInTheSameSessionByClassName(FlinkInterpreter.class);
+    sqlCommandParser = new SqlCommandParser(flinkInterpreter.getFlinkShims(), tbenv);
     this.sqlSplitter = new SqlSplitter();
     JobListener jobListener = new JobListener() {
       @Override
@@ -126,41 +94,12 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
     flinkInterpreter.getExecutionEnvironment().getJavaEnv().registerJobListener(jobListener);
     flinkInterpreter.getStreamExecutionEnvironment().getJavaEnv().registerJobListener(jobListener);
     this.defaultSqlParallelism = flinkInterpreter.getDefaultSqlParallelism();
-    this.tableConfigOptions = extractTableConfigOptions();
-  }
-
-  private Map<String, ConfigOption> extractTableConfigOptions() {
-    Map<String, ConfigOption> configOptions = new HashMap<>();
-    configOptions.putAll(extractConfigOptions(ExecutionConfigOptions.class));
-    configOptions.putAll(extractConfigOptions(OptimizerConfigOptions.class));
-    configOptions.putAll(extractConfigOptions(PythonOptions.class));
-    return configOptions;
-  }
-
-  private Map<String, ConfigOption> extractConfigOptions(Class clazz) {
-    Map<String, ConfigOption> configOptions = new HashMap();
-    Field[] fields = clazz.getDeclaredFields();
-    for (Field field : fields) {
-      if (field.getType().isAssignableFrom(ConfigOption.class)) {
-        try {
-          ConfigOption configOption = (ConfigOption) field.get(ConfigOption.class);
-          configOptions.put(configOption.key(), configOption);
-        } catch (Throwable e) {
-          LOGGER.warn("Fail to get ConfigOption", e);
-        }
-      }
-    }
-    return configOptions;
+    this.tableConfigOptions = flinkInterpreter.getFlinkShims().extractTableConfigOptions();
   }
 
   @Override
-  public InterpreterResult interpret(String st,
-                                     InterpreterContext context) throws InterpreterException {
+  protected InterpreterResult internalInterpret(String st, InterpreterContext context) throws InterpreterException {
     LOGGER.debug("Interpret code: " + st);
-    flinkInterpreter.getZeppelinContext().setInterpreterContext(context);
-    flinkInterpreter.getZeppelinContext().setNoteGui(context.getNoteGui());
-    flinkInterpreter.getZeppelinContext().setGui(context.getGui());
-
     // set ClassLoader of current Thread to be the ClassLoader of Flink scala-shell,
     // otherwise codegen will fail to find classes defined in scala-shell
     ClassLoader originClassLoader = Thread.currentThread().getContextClassLoader();
@@ -168,29 +107,34 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
       Thread.currentThread().setContextClassLoader(flinkInterpreter.getFlinkScalaShellLoader());
       flinkInterpreter.createPlannerAgain();
       flinkInterpreter.setParallelismIfNecessary(context);
-      flinkInterpreter.setSavePointIfNecessary(context);
+      flinkInterpreter.setSavepointIfNecessary(context);
       return runSqlList(st, context);
     } finally {
       Thread.currentThread().setContextClassLoader(originClassLoader);
     }
   }
 
+  @Override
+  public ZeppelinContext getZeppelinContext() {
+    if (flinkInterpreter != null) {
+      return flinkInterpreter.getZeppelinContext();
+    } else {
+      return null;
+    }
+  }
+
   private InterpreterResult runSqlList(String st, InterpreterContext context) {
-    // clear current paragraph's tableConfig before running any sql statements
-    Map<String, String> tableConfig = paragraphTableConfigMap.getOrDefault(context.getParagraphId(), new HashMap<>());
-    tableConfig.clear();
-    paragraphTableConfigMap.put(context.getParagraphId(), tableConfig);
 
     try {
       boolean runAsOne = Boolean.parseBoolean(context.getStringLocalProperty("runAsOne", "false"));
       List<String> sqls = sqlSplitter.splitSql(st);
       boolean isFirstInsert = true;
       for (String sql : sqls) {
-        Optional<SqlCommandParser.SqlCommandCall> sqlCommand = SqlCommandParser.parse(sql);
+        Optional<SqlCommandParser.SqlCommandCall> sqlCommand = sqlCommandParser.parse(sql);
         if (!sqlCommand.isPresent()) {
           try {
             context.out.write("%text Invalid Sql statement: " + sql + "\n");
-            context.out.write(MESSAGE_HELP.toString());
+            context.out.write(flinkInterpreter.getFlinkShims().sqlHelp());
           } catch (IOException e) {
             return new InterpreterResult(InterpreterResult.Code.ERROR, e.toString());
           }
@@ -275,6 +219,15 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
       case SOURCE:
         callSource(cmdCall.operands[0], context);
         break;
+      case CREATE_FUNCTION:
+        callCreateFunction(cmdCall.operands[0], context);
+        break;
+      case DROP_FUNCTION:
+        callDropFunction(cmdCall.operands[0], context);
+        break;
+      case ALTER_FUNCTION:
+        callAlterFunction(cmdCall.operands[0], context);
+        break;
       case SHOW_FUNCTIONS:
         callShowFunctions(context);
         break;
@@ -287,6 +240,13 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
       case USE:
         callUseDatabase(cmdCall.operands[0], context);
         break;
+      case CREATE_CATALOG:
+        callCreateCatalog(cmdCall.operands[0], context);
+        break;
+      case DROP_CATALOG:
+        callDropCatalog(cmdCall.operands[0], context);
+        break;
+      case DESC:
       case DESCRIBE:
         callDescribe(cmdCall.operands[0], context);
         break;
@@ -310,10 +270,10 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
         callDropTable(cmdCall.operands[0], context);
         break;
       case CREATE_VIEW:
-        callCreateView(cmdCall.operands[0], cmdCall.operands[1], context);
+        callCreateView(cmdCall, context);
         break;
       case DROP_VIEW:
-        callDropView(cmdCall.operands[0], context);
+        callDropView(cmdCall, context);
         break;
       case CREATE_DATABASE:
         callCreateDatabase(cmdCall.operands[0], context);
@@ -378,15 +338,30 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
     context.out.write("Database has been created.\n");
   }
 
-  private void callDropView(String view, InterpreterContext context) throws IOException {
-    this.tbenv.dropTemporaryView(view);
+  private void callDropView(SqlCommandParser.SqlCommandCall sqlCommand, InterpreterContext context) throws IOException {
+    try {
+      lock.lock();
+      if (flinkInterpreter.getFlinkVersion().isFlink110()) {
+        this.tbenv.dropTemporaryView(sqlCommand.operands[0]);
+      } else {
+        flinkInterpreter.getFlinkShims().executeSql(tbenv, sqlCommand.sql);
+      }
+    } finally {
+      if (lock.isHeldByCurrentThread()) {
+        lock.unlock();
+      }
+    }
     context.out.write("View has been dropped.\n");
   }
 
-  private void callCreateView(String name, String query, InterpreterContext context) throws IOException {
+  private void callCreateView(SqlCommandParser.SqlCommandCall sqlCommand, InterpreterContext context) throws IOException {
     try {
       lock.lock();
-      this.tbenv.createTemporaryView(name, tbenv.sqlQuery(query));
+      if (flinkInterpreter.getFlinkVersion().isFlink110()) {
+        this.tbenv.createTemporaryView(sqlCommand.operands[0], tbenv.sqlQuery(sqlCommand.operands[1]));
+      } else {
+        flinkInterpreter.getFlinkShims().executeSql(tbenv, sqlCommand.sql);
+      }
     } finally {
       if (lock.isHeldByCurrentThread()) {
         lock.unlock();
@@ -419,8 +394,18 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
     context.out.write("Table has been dropped.\n");
   }
 
-  private void callUseCatalog(String catalog, InterpreterContext context) {
+  private void callUseCatalog(String catalog, InterpreterContext context) throws IOException {
     this.tbenv.useCatalog(catalog);
+  }
+
+  private void callCreateCatalog(String sql, InterpreterContext context) throws IOException {
+    flinkInterpreter.getFlinkShims().executeSql(tbenv, sql);
+    context.out.write("Catalog has been created.\n");
+  }
+
+  private void callDropCatalog(String sql, InterpreterContext context) throws IOException {
+    flinkInterpreter.getFlinkShims().executeSql(tbenv, sql);
+    context.out.write("Catalog has been dropped.\n");
   }
 
   private void callShowModules(InterpreterContext context) throws IOException {
@@ -429,7 +414,7 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
   }
 
   private void callHelp(InterpreterContext context) throws IOException {
-    context.out.write(MESSAGE_HELP.toString());
+    context.out.write(flinkInterpreter.getFlinkShims().sqlHelp());
   }
 
   private void callShowCatalogs(InterpreterContext context) throws IOException {
@@ -456,6 +441,21 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
     runSqlList(sql, context);
   }
 
+  private void callCreateFunction(String sql, InterpreterContext context) throws IOException {
+    flinkInterpreter.getFlinkShims().executeSql(tbenv, sql);
+    context.out.write("Function has been created.\n");
+  }
+
+  private void callDropFunction(String sql, InterpreterContext context) throws IOException {
+    flinkInterpreter.getFlinkShims().executeSql(tbenv, sql);
+    context.out.write("Function has been dropped.\n");
+  }
+
+  private void callAlterFunction(String sql, InterpreterContext context) throws IOException {
+    flinkInterpreter.getFlinkShims().executeSql(tbenv, sql);
+    context.out.write("Function has been modified.\n");
+  }
+
   private void callShowFunctions(InterpreterContext context) throws IOException {
     String[] functions = this.tbenv.listUserDefinedFunctions();
     context.out.write(
@@ -480,8 +480,7 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
   private void callExplain(String sql, InterpreterContext context) throws IOException {
     try {
       lock.lock();
-      Table table = this.tbenv.sqlQuery(sql);
-      context.out.write(this.tbenv.explain(table) + "\n");
+      context.out.write(this.flinkInterpreter.getFlinkShims().explain(tbenv, sql) + "\n");
     } finally {
       if (lock.isHeldByCurrentThread()) {
         lock.unlock();
@@ -492,12 +491,6 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
   public void callSelect(String sql, InterpreterContext context) throws IOException {
     try {
       lock.lock();
-      // set table config from set statement until now.
-      Map<String, String> paragraphTableConfig = paragraphTableConfigMap.get(context.getParagraphId());
-      for (Map.Entry<String, String> entry : paragraphTableConfig.entrySet()) {
-        this.tbenv.getConfig().getConfiguration().setString(entry.getKey(), entry.getValue());
-      }
-
       callInnerSelect(sql, context);
     } finally {
       if (lock.isHeldByCurrentThread()) {
@@ -513,7 +506,7 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
       throw new IOException(key + " is not a valid table/sql config, please check link: " +
               "https://ci.apache.org/projects/flink/flink-docs-release-1.10/dev/table/config.html");
     }
-    paragraphTableConfigMap.get(context.getParagraphId()).put(key, value);
+    this.tbenv.getConfig().getConfiguration().setString(key, value);
   }
 
   public void callInsertInto(String sql,
@@ -523,13 +516,6 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
      }
      try {
        lock.lock();
-
-       // set table config from set statement until now.
-       Map<String, String> paragraphTableConfig = paragraphTableConfigMap.get(context.getParagraphId());
-       for (Map.Entry<String, String> entry : paragraphTableConfig.entrySet()) {
-         this.tbenv.getConfig().getConfiguration().setString(entry.getKey(), entry.getValue());
-       }
-
        boolean runAsOne = Boolean.parseBoolean(context.getStringLocalProperty("runAsOne", "false"));
        if (!runAsOne) {
          this.tbenv.sqlUpdate(sql);
@@ -553,14 +539,4 @@ public abstract class FlinkSqlInterrpeter extends Interpreter {
     this.flinkInterpreter.cancel(context);
   }
 
-  private static AttributedString formatCommand(SqlCommand cmd, String description) {
-    return new AttributedStringBuilder()
-            .style(AttributedStyle.DEFAULT.bold())
-            .append(cmd.toString())
-            .append("\t\t")
-            .style(AttributedStyle.DEFAULT)
-            .append(description)
-            .append('\n')
-            .toAttributedString();
-  }
 }

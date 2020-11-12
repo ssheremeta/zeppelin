@@ -22,7 +22,6 @@ import org.apache.commons.exec.CommandLine;
 import org.apache.commons.exec.ExecuteException;
 import org.apache.hadoop.yarn.util.ConverterUtils;
 import org.apache.zeppelin.interpreter.YarnAppMonitor;
-import org.apache.zeppelin.interpreter.thrift.RemoteInterpreterService;
 import org.apache.zeppelin.interpreter.util.ProcessLauncher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,10 +63,11 @@ public class RemoteInterpreterManagedProcess extends RemoteInterpreterProcess {
       String localRepoDir,
       Map<String, String> env,
       int connectTimeout,
+      int connectionPoolSize,
       String interpreterSettingName,
       String interpreterGroupId,
       boolean isUserImpersonated) {
-    super(connectTimeout, intpEventServerHost, intpEventServerPort);
+    super(connectTimeout, connectionPoolSize, intpEventServerHost, intpEventServerPort);
     this.interpreterRunner = intpRunner;
     this.interpreterPortRange = interpreterPortRange;
     this.env = env;

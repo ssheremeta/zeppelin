@@ -110,10 +110,10 @@ For more information, please consult [Interpreter Binding Mode](./interpreter_bi
 ## Interpreter Lifecycle Management
 
 Before 0.8.0, Zeppelin doesn't have lifecycle management for interpreters. Users had to shut down interpreters explicitly via the UI. Starting from 0.8.0, Zeppelin provides a new interface
-`LifecycleManager` to control the lifecycle of interpreters. For now, there are two implementations: `NullLifecycleManager` and `TimeoutLifecycleManager` which is the default. 
+`LifecycleManager` to control the lifecycle of interpreters. For now, there are two implementations: `NullLifecycleManager` and `TimeoutLifecycleManager`. 
 
 `NullLifecycleManager` will do nothing, i.e., the user needs to control the lifecycle of interpreter by themselves as before. `TimeoutLifecycleManager` will shut down interpreters after an interpreter remains idle for a while. By default, the idle threshold is 1 hour.
-Users can change this threshold via the `zeppelin.interpreter.lifecyclemanager.timeout.threshold` setting. `TimeoutLifecycleManager` is the default lifecycle manager, and users can change it via `zeppelin.interpreter.lifecyclemanager.class`.
+Users can change this threshold via the `zeppelin.interpreter.lifecyclemanager.timeout.threshold` setting. `NullLifecycleManager` is the default lifecycle manager, and users can change it via `zeppelin.interpreter.lifecyclemanager.class`.
 
 
 ## Inline Generic Configuration
@@ -167,3 +167,9 @@ Here's one screenshot of how one running paragraph of flink interpreter works.
 
 
 <img src="{{BASE_PATH}}/assets/themes/zeppelin/img/docs-img/flink_recovery.gif" width="800px">
+
+## Choose Interpreters
+
+By default, Zeppelin will register and display all the interpreters under folder `$ZEPPELIN_HOME/interpreters`.
+But you can configure property `zeppelin.interpreter.include` to specify what interpreters you want to include or `zeppelin.interpreter.exclude` to specify what interpreters you want to exclude.
+Only one of them can be specified, you can not specify them together.

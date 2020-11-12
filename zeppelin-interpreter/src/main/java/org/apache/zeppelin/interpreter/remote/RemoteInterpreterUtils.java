@@ -18,13 +18,10 @@
 package org.apache.zeppelin.interpreter.remote;
 
 import org.apache.commons.lang3.StringUtils;
-import org.apache.thrift.transport.TServerSocket;
-import org.apache.thrift.transport.TTransportException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.net.ConnectException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -40,36 +37,25 @@ import java.util.Collections;
  *
  */
 public class RemoteInterpreterUtils {
-  static Logger LOGGER = LoggerFactory.getLogger(RemoteInterpreterUtils.class);
+  private static final Logger LOGGER = LoggerFactory.getLogger(RemoteInterpreterUtils.class);
 
-
-  public static int findRandomAvailablePortOnAllLocalInterfaces() throws IOException {
-    int port;
-    try (ServerSocket socket = new ServerSocket(0);) {
-      port = socket.getLocalPort();
-      socket.close();
-    }
-    return port;
+  private RemoteInterpreterUtils() {
+    throw new IllegalStateException("Utility class");
   }
 
-  /**
-   * start:end
-   *
-   * @param portRange
-   * @return
-   * @throws IOException
-   */
-  public static TServerSocket createTServerSocket(String portRange)
-      throws IOException {
+  public static int findRandomAvailablePortOnAllLocalInterfaces() throws IOException {
+    try (ServerSocket socket = new ServerSocket(0)) {
+      return socket.getLocalPort();
+    }
+  }
 
-    TServerSocket tSocket = null;
+  public static int findAvailablePort(String portRange) throws IOException {
     // ':' is the default value which means no constraints on the portRange
     if (StringUtils.isBlank(portRange) || portRange.equals(":")) {
-      try {
-        tSocket = new TServerSocket(0);
-        return tSocket;
-      } catch (TTransportException e) {
-        throw new IOException("Fail to create TServerSocket", e);
+      try (ServerSocket socket = new ServerSocket(0)) {
+        return socket.getLocalPort();
+      } catch (IOException e) {
+        throw new IOException("Failed to allocate a automatic port", e);
       }
     }
     // valid user registered port https://en.wikipedia.org/wiki/Registered_port
@@ -83,10 +69,9 @@ public class RemoteInterpreterUtils {
       end = Integer.parseInt(ports[1]);
     }
     for (int i = start; i <= end; ++i) {
-      try {
-        tSocket = new TServerSocket(i);
-        return tSocket;
-      } catch (Exception e) {
+      try (ServerSocket socket = new ServerSocket(i)) {
+        return socket.getLocalPort();
+      } catch (IOException e) {
         // ignore this
       }
     }
@@ -117,25 +102,14 @@ public class RemoteInterpreterUtils {
   }
 
   public static boolean checkIfRemoteEndpointAccessible(String host, int port) {
-    try {
-      Socket discover = new Socket();
+    try (Socket discover = new Socket()) {
       discover.setSoTimeout(1000);
       discover.connect(new InetSocketAddress(host, port), 1000);
-      discover.close();
       return true;
-    } catch (ConnectException cne) {
+    } catch (IOException e) {
       // end point is not accessible
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Remote endpoint '" + host + ":" + port + "' is not accessible " +
-            "(might be initializing): " + cne.getMessage());
-      }
-      return false;
-    } catch (IOException ioe) {
-      // end point is not accessible
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Remote endpoint '" + host + ":" + port + "' is not accessible " +
-            "(might be initializing): " + ioe.getMessage());
-      }
+      LOGGER.debug("Remote endpoint '{}:{}' is not accessible " +
+            "(might be initializing): {}" , host, port, e.getMessage());
       return false;
     }
   }
@@ -143,7 +117,7 @@ public class RemoteInterpreterUtils {
   public static String getInterpreterSettingId(String intpGrpId) {
     String settingId = null;
     if (intpGrpId != null) {
-      int indexOfColon = intpGrpId.indexOf("-");
+      int indexOfColon = intpGrpId.indexOf('-');
       settingId = intpGrpId.substring(0, indexOfColon);
     }
     return settingId;

@@ -46,11 +46,11 @@ import java.util.EnumSet;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-@RunWith(value = Parameterized.class)
-public class FlinkIntegrationTest {
-  private static Logger LOGGER = LoggerFactory.getLogger(SparkIntegrationTest.class);
+public abstract class FlinkIntegrationTest {
+  private static Logger LOGGER = LoggerFactory.getLogger(FlinkIntegrationTest.class);
 
   private static MiniHadoopCluster hadoopCluster;
   private static MiniZeppelin zeppelin;
@@ -65,14 +65,7 @@ public class FlinkIntegrationTest {
     LOGGER.info("Testing FlinkVersion: " + flinkVersion);
     this.flinkVersion = flinkVersion;
     this.flinkHome = DownloadUtils.downloadFlink(flinkVersion);
-    this.hadoopHome = DownloadUtils.downloadHadoop("2.7.3");
-  }
-
-  @Parameterized.Parameters
-  public static List<Object[]> data() {
-    return Arrays.asList(new Object[][]{
-        {"1.9.0"}
-    });
+    this.hadoopHome = DownloadUtils.downloadHadoop("2.7.7");
   }
 
   @BeforeClass
@@ -83,7 +76,7 @@ public class FlinkIntegrationTest {
     hadoopCluster.start();
 
     zeppelin = new MiniZeppelin();
-    zeppelin.start();
+    zeppelin.start(FlinkIntegrationTest.class);
     interpreterFactory = zeppelin.getInterpreterFactory();
     interpreterSettingManager = zeppelin.getInterpreterSettingManager();
   }
@@ -110,6 +103,14 @@ public class FlinkIntegrationTest {
     interpreterResult = flinkInterpreter.interpret("val data = benv.fromElements(1, 2, 3)\ndata.collect()", context);
     assertEquals(InterpreterResult.Code.SUCCESS, interpreterResult.code());
     assertTrue(interpreterResult.message().get(0).getData().contains("1, 2, 3"));
+
+    interpreterResult = flinkInterpreter.interpret("val data = senv.fromElements(1, 2, 3)\ndata.print()", context);
+    assertEquals(InterpreterResult.Code.SUCCESS, interpreterResult.code());
+
+    // check spark weburl in zeppelin-server side
+    InterpreterSetting flinkInterpreterSetting = interpreterSettingManager.getByName("flink");
+    assertEquals(1, flinkInterpreterSetting.getAllInterpreterGroups().size());
+    assertNotNull(flinkInterpreterSetting.getAllInterpreterGroups().get(0).getWebUrl());
   }
 
   @Test
@@ -117,6 +118,7 @@ public class FlinkIntegrationTest {
     InterpreterSetting flinkInterpreterSetting = interpreterSettingManager.getInterpreterSettingByName("flink");
     flinkInterpreterSetting.setProperty("FLINK_HOME", flinkHome);
     flinkInterpreterSetting.setProperty("ZEPPELIN_CONF_DIR", zeppelin.getZeppelinConfDir().getAbsolutePath());
+    flinkInterpreterSetting.setProperty("flink.execution.mode", "local");
 
     testInterpreterBasics();
 

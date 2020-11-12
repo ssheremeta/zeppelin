@@ -124,12 +124,13 @@ public class Note implements JsonSerializable {
 
   /********************************** transient fields ******************************************/
   private transient boolean loaded = false;
+  private transient boolean saved = false;
   private transient InterpreterFactory interpreterFactory;
   private transient InterpreterSettingManager interpreterSettingManager;
   private transient ParagraphJobListener paragraphJobListener;
   private transient List<NoteEventListener> noteEventListeners = new ArrayList<>();
   private transient Credentials credentials;
-
+  private transient ZeppelinConfiguration zConf = ZeppelinConfiguration.create();
 
   public Note() {
     generateId();
@@ -148,7 +149,7 @@ public class Note implements JsonSerializable {
     this.version = Util.getVersion();
     generateId();
 
-    setCronSupported(ZeppelinConfiguration.create());
+    setCronSupported(zConf);
   }
 
   public Note(NoteInfo noteInfo) {
@@ -190,13 +191,28 @@ public class Note implements JsonSerializable {
    * Release note memory
    */
   public void unLoad() {
-    this.setLoaded(false);
-    this.paragraphs = null;
-    this.config = null;
-    this.info = null;
-    this.noteForms = null;
-    this.noteParams = null;
-    this.angularObjects = null;
+    if (isRunning() || isParagraphRunning()) {
+      LOGGER.warn("Unable to unload note because it is in RUNNING");
+    } else {
+      this.setLoaded(false);
+      this.paragraphs = null;
+      this.config = null;
+      this.info = null;
+      this.noteForms = null;
+      this.noteParams = null;
+      this.angularObjects = null;
+    }
+  }
+
+  public boolean isParagraphRunning() {
+    if (paragraphs != null) {
+      for (Paragraph p : paragraphs) {
+        if (p.isRunning()) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   public boolean isPersonalizedMode() {
@@ -394,7 +410,7 @@ public class Note implements JsonSerializable {
   /**
    * Delete the note AngularObject.
    */
-  public void deleteAngularObject(String intpGroupId, AngularObject angularObject) {
+  public void deleteAngularObject(String intpGroupId, String noteId, String paragraphId, String name) {
     List<AngularObject> angularObjectList;
     if (!angularObjects.containsKey(intpGroupId)) {
       return;
@@ -404,21 +420,26 @@ public class Note implements JsonSerializable {
       // Delete existing AngularObject
       Iterator<AngularObject> iter = angularObjectList.iterator();
       while(iter.hasNext()){
-        String noteId = "", paragraphId = "";
+        String noteIdCandidate = "";
+        String paragraphIdCandidate = "";
+        String nameCandidate = "";
         Object object = iter.next();
         if (object instanceof AngularObject) {
           AngularObject ao = (AngularObject)object;
-          noteId = ao.getNoteId();
-          paragraphId = ao.getParagraphId();
+          noteIdCandidate = ao.getNoteId();
+          paragraphIdCandidate = ao.getParagraphId();
+          nameCandidate = ao.getName();
         } else if (object instanceof RemoteAngularObject) {
-          RemoteAngularObject rao = (RemoteAngularObject)object;
-          noteId = rao.getNoteId();
-          paragraphId = rao.getParagraphId();
+          RemoteAngularObject rao = (RemoteAngularObject) object;
+          noteIdCandidate = rao.getNoteId();
+          paragraphIdCandidate = rao.getParagraphId();
+          nameCandidate = rao.getName();
         } else {
           continue;
         }
-        if (StringUtils.equals(noteId, angularObject.getNoteId())
-            && StringUtils.equals(paragraphId, angularObject.getParagraphId())) {
+        if (StringUtils.equals(noteId, noteIdCandidate)
+            && StringUtils.equals(paragraphId, paragraphIdCandidate)
+            && StringUtils.equals(name, nameCandidate)) {
           iter.remove();
         }
       }
@@ -698,46 +719,6 @@ public class Note implements JsonSerializable {
     }
   }
 
-  public List<Map<String, String>> generateParagraphsInfo() {
-    List<Map<String, String>> paragraphsInfo = new LinkedList<>();
-    synchronized (paragraphs) {
-      for (Paragraph p : paragraphs) {
-        Map<String, String> info = populateParagraphInfo(p);
-        paragraphsInfo.add(info);
-      }
-    }
-    return paragraphsInfo;
-  }
-
-  public Map<String, String> generateSingleParagraphInfo(String paragraphId) {
-    synchronized (paragraphs) {
-      for (Paragraph p : paragraphs) {
-        if (p.getId().equals(paragraphId)) {
-          return populateParagraphInfo(p);
-        }
-      }
-      return new HashMap<>();
-    }
-  }
-
-  private Map<String, String> populateParagraphInfo(Paragraph p) {
-    Map<String, String> info = new HashMap<>();
-    info.put("id", p.getId());
-    info.put("status", p.getStatus().toString());
-    if (p.getDateStarted() != null) {
-      info.put("started", p.getDateStarted().toString());
-    }
-    if (p.getDateFinished() != null) {
-      info.put("finished", p.getDateFinished().toString());
-    }
-    if (p.getStatus().isRunning()) {
-      info.put("progress", String.valueOf(p.progress()));
-    } else {
-      info.put("progress", String.valueOf(100));
-    }
-    return info;
-  }
-
   private void setParagraphMagic(Paragraph p, int index) {
     if (paragraphs.size() > 0) {
       String replName;
@@ -766,6 +747,9 @@ public class Note implements JsonSerializable {
                      boolean blocking,
                      boolean isolated,
                      Map<String, Object> params) throws Exception {
+    if (isRunning()) {
+      throw new Exception("Unable to run note:" + id + " because it is still in RUNNING state.");
+    }
     setIsolatedMode(isolated);
     setRunning(true);
     setStartTime(DATE_TIME_FORMATTER.format(LocalDateTime.now()));
@@ -820,8 +804,7 @@ public class Note implements JsonSerializable {
           // Must run each paragraph in blocking way.
           if (!run(p.getId(), true)) {
             LOGGER.warn("Skip running the remain notes because paragraph {} fails", p.getId());
-            throw new Exception("Fail to run note because paragraph " + p.getId() + " is failed, result: " +
-                    p.getReturn());
+            return;
           }
         } catch (InterpreterNotFoundException e) {
           // ignore, because the following run method will fail if interpreter not found.
@@ -866,7 +849,7 @@ public class Note implements JsonSerializable {
    * @param blocking Whether run this paragraph in blocking way
    */
   public boolean run(String paragraphId, boolean blocking) {
-    return run(paragraphId, blocking, null);
+    return run(paragraphId, null, blocking, null);
   }
 
   /**
@@ -878,6 +861,7 @@ public class Note implements JsonSerializable {
    * @return
    */
   public boolean run(String paragraphId,
+                     String interpreterGroupId,
                      boolean blocking,
                      String ctxUser) {
     Paragraph p = getParagraph(paragraphId);
@@ -886,7 +870,7 @@ public class Note implements JsonSerializable {
       p = p.getUserParagraph(ctxUser);
 
     p.setListener(this.paragraphJobListener);
-    return p.execute(blocking);
+    return p.execute(interpreterGroupId, blocking);
   }
 
   /**
@@ -1026,12 +1010,10 @@ public class Note implements JsonSerializable {
   public List<InterpreterSetting> getUsedInterpreterSettings() {
     Set<InterpreterSetting> settings = new HashSet<>();
     for (Paragraph p : getParagraphs()) {
-      try {
-        Interpreter intp = p.getBindedInterpreter();
+      Interpreter intp = p.getInterpreter();
+      if (intp != null) {
         settings.add((
                 (ManagedInterpreterGroup) intp.getInterpreterGroup()).getInterpreterSetting());
-      } catch (InterpreterNotFoundException e) {
-        // ignore this
       }
     }
     return new ArrayList<>(settings);
@@ -1117,6 +1099,10 @@ public class Note implements JsonSerializable {
     info.remove("startTime");
   }
 
+  /**
+   * Is note running
+   * @return
+   */
   public boolean isRunning() {
     return (boolean) getInfo().getOrDefault("isRunning", false);
   }
@@ -1162,6 +1148,9 @@ public class Note implements JsonSerializable {
       p.setAuthenticationInfo(AuthenticationInfo.ANONYMOUS);
 
       if (p.getStatus() == Status.PENDING) {
+        p.setStatus(Status.ABORT);
+      }
+      if (p.getStatus() == Status.RUNNING && !zConf.isRecoveryEnabled()) {
         p.setStatus(Status.ABORT);
       }
 
@@ -1230,5 +1219,13 @@ public class Note implements JsonSerializable {
 
   public void setNoteEventListeners(List<NoteEventListener> noteEventListeners) {
     this.noteEventListeners = noteEventListeners;
+  }
+
+  public void setSaved(boolean saved) {
+    this.saved = saved;
+  }
+
+  public boolean isSaved() {
+    return saved;
   }
 }

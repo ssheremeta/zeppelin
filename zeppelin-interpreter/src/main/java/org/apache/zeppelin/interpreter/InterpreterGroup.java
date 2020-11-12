@@ -47,8 +47,9 @@ public class InterpreterGroup {
   private static final Logger LOGGER = LoggerFactory.getLogger(InterpreterGroup.class);
 
   protected String id;
+  private String webUrl;
   // sessionId --> interpreters
-  protected Map<String, List<Interpreter>> sessions = new ConcurrentHashMap();
+  protected Map<String, List<Interpreter>> sessions = new ConcurrentHashMap<>();
   private AngularObjectRegistry angularObjectRegistry;
   private InterpreterHookRegistry hookRegistry;
   private ResourcePool resourcePool;
@@ -75,6 +76,14 @@ public class InterpreterGroup {
 
   public String getId() {
     return this.id;
+  }
+
+  public String getWebUrl() {
+    return webUrl;
+  }
+
+  public void setWebUrl(String webUrl) {
+    this.webUrl = webUrl;
   }
 
   //TODO(zjffdu) change it to getSession. For now just keep this method to reduce code change
@@ -106,15 +115,15 @@ public class InterpreterGroup {
   public AngularObjectRegistry getAngularObjectRegistry() {
     return angularObjectRegistry;
   }
-  
+
   public void setAngularObjectRegistry(AngularObjectRegistry angularObjectRegistry) {
     this.angularObjectRegistry = angularObjectRegistry;
   }
-  
+
   public InterpreterHookRegistry getInterpreterHookRegistry() {
     return hookRegistry;
   }
-  
+
   public void setInterpreterHookRegistry(InterpreterHookRegistry hookRegistry) {
     this.hookRegistry = hookRegistry;
   }
@@ -169,7 +178,7 @@ public class InterpreterGroup {
           interpreter.close();
           interpreter.getScheduler().stop();
         } catch (InterpreterException e) {
-          LOGGER.warn("Fail to close interpreter: " + interpreter.getClassName(), e);
+          LOGGER.warn("Fail to close interpreter: {}", interpreter.getClassName(), e);
         }
       }
     }

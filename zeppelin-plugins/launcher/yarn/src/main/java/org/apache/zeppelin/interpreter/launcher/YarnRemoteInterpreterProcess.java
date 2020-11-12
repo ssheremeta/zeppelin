@@ -20,6 +20,7 @@ package org.apache.zeppelin.interpreter.launcher;
 import com.google.common.collect.Lists;
 import com.google.common.io.Files;
 import org.apache.commons.io.FileUtils;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -98,8 +99,9 @@ public class YarnRemoteInterpreterProcess extends RemoteInterpreterProcess {
           InterpreterLaunchContext launchContext,
           Properties properties,
           Map<String, String> envs,
-          int connectTimeout) {
-    super(connectTimeout, launchContext.getIntpEventServerHost(), launchContext.getIntpEventServerPort());
+          int connectTimeout,
+          int connectionPoolSize) {
+    super(connectTimeout, connectionPoolSize, launchContext.getIntpEventServerHost(), launchContext.getIntpEventServerPort());
     this.zConf = ZeppelinConfiguration.create();
     this.launchContext = launchContext;
     this.properties = properties;
@@ -195,7 +197,6 @@ public class YarnRemoteInterpreterProcess extends RemoteInterpreterProcess {
                 + ", diagnostics=" + appReport.getDiagnostics());
       }
       isYarnAppRunning.set(true);
-
     } catch (Exception e) {
       LOGGER.error("Fail to launch yarn interpreter process", e);
       throw new IOException(e);
@@ -256,6 +257,14 @@ public class YarnRemoteInterpreterProcess extends RemoteInterpreterProcess {
       destPath = copyFileToRemote(stagingDir, srcPath, (short) 1);
       addResource(fs, destPath, localResources, LocalResourceType.ARCHIVE, "flink");
       FileUtils.forceDelete(flinkZip);
+
+      String hiveConfDir = launchContext.getProperties().getProperty("HIVE_CONF_DIR");
+      if (!org.apache.commons.lang3.StringUtils.isBlank(hiveConfDir)) {
+        File hiveConfZipFile = createHiveConfZip(new File(hiveConfDir));
+        srcPath = localFs.makeQualified(new Path(hiveConfZipFile.toURI()));
+        destPath = copyFileToRemote(stagingDir, srcPath, (short) 1);
+        addResource(fs, destPath, localResources, LocalResourceType.ARCHIVE, "hive_conf");
+      }
     }
     amContainer.setLocalResources(localResources);
 
@@ -296,6 +305,7 @@ public class YarnRemoteInterpreterProcess extends RemoteInterpreterProcess {
       this.envs.put("FLINK_CONF_DIR", ApplicationConstants.Environment.PWD.$() + "/flink/conf");
       this.envs.put("FLINK_LIB_DIR", ApplicationConstants.Environment.PWD.$() + "/flink/lib");
       this.envs.put("FLINK_PLUGINS_DIR", ApplicationConstants.Environment.PWD.$() + "/flink/plugins");
+      this.envs.put("HIVE_CONF_DIR", ApplicationConstants.Environment.PWD.$() + "/hive_conf");
     }
     // set -Xmx
     int memory = Integer.parseInt(
@@ -323,6 +333,9 @@ public class YarnRemoteInterpreterProcess extends RemoteInterpreterProcess {
       }
       envs.put(ApplicationConstants.Environment.CLASSPATH.name(), newValue);
     }
+    // set HADOOP_MAPRED_HOME explicitly, otherwise it won't work for hadoop3
+    // see https://stackoverflow.com/questions/50719585/unable-to-run-mapreduce-wordcount
+    this.envs.put("HADOOP_MAPRED_HOME", "${HADOOP_HOME}");
   }
 
   private String[] getYarnAppClasspath() {
@@ -479,6 +492,23 @@ public class YarnRemoteInterpreterProcess extends RemoteInterpreterProcess {
     flinkZipStream.flush();
     flinkZipStream.close();
     return flinkArchive;
+  }
+
+  private File createHiveConfZip(File hiveConfDir) throws IOException {
+    File hiveConfArchive = File.createTempFile("hive_conf", ".zip", Files.createTempDir());
+    ZipOutputStream hiveConfZipStream = new ZipOutputStream(new FileOutputStream(hiveConfArchive));
+    hiveConfZipStream.setLevel(0);
+
+    if (!hiveConfDir.exists()) {
+      throw new IOException("HIVE_CONF_DIR " + hiveConfDir.getAbsolutePath() + " doesn't exist");
+    }
+    for (File file : hiveConfDir.listFiles()) {
+      addFileToZipStream(hiveConfZipStream, file, null);
+    }
+
+    hiveConfZipStream.flush();
+    hiveConfZipStream.close();
+    return hiveConfArchive;
   }
 
   private Path copyFileToRemote(

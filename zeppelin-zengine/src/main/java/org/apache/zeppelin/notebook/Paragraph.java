@@ -81,6 +81,7 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
   private String text;
   private String user;
   private Date dateUpdated;
+  private int progress;
   // paragraph configs like isOpen, colWidth, etc
   private Map<String, Object> config = new HashMap<>();
   // form and parameter settings
@@ -93,6 +94,7 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
   private transient String intpText;
   private transient String scriptText;
   private transient Interpreter interpreter;
+  private transient String interpreterGroupId;
   private transient Note note;
   private transient AuthenticationInfo subject;
   // personalized
@@ -124,7 +126,7 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
     this.note = p2.note;
     this.settings.setParams(Maps.newHashMap(p2.settings.getParams()));
     this.settings.setForms(Maps.newLinkedHashMap(p2.settings.getForms()));
-    this.setConfig(Maps.newHashMap(p2.config));
+    this.setConfig(Maps.newHashMap(p2.getConfig()));
     this.setAuthenticationInfo(p2.getAuthenticationInfo());
     this.title = p2.title;
     this.text = p2.text;
@@ -248,13 +250,19 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
             .setDefaultInterpreterGroup(note.getDefaultInterpreterGroup())
             .setInIsolatedMode(note.isIsolatedMode())
             .setStartTime(note.getStartTime())
+            .setInterpreterGroupId(interpreterGroupId)
             .createExecutionContext();
 
     return this.note.getInterpreterFactory().getInterpreter(intpText, executionContext);
   }
 
+  @VisibleForTesting
   public void setInterpreter(Interpreter interpreter) {
     this.interpreter = interpreter;
+  }
+
+  public Interpreter getInterpreter() {
+    return interpreter;
   }
 
   public List<InterpreterCompletion> completion(String buffer, int cursor) {
@@ -280,7 +288,10 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
     if (this.scriptText.isEmpty()) {
       return 0;
     }
-    int countCharactersBeforeScript = buffer.indexOf(this.scriptText);
+    // Try to find the right cursor from this startPos, otherwise you may get the wrong cursor.
+    // e.g.  %spark.pyspark  spark.
+    int startPos = this.intpText == null ? 0 : this.intpText.length();
+    int countCharactersBeforeScript = buffer.indexOf(this.scriptText, startPos);
     if (countCharactersBeforeScript > 0) {
       cursor -= countCharactersBeforeScript;
     }
@@ -297,7 +308,8 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
   public int progress() {
     try {
       if (this.interpreter != null) {
-        return this.interpreter.getProgress(getInterpreterContext());
+        this.progress = this.interpreter.getProgress(getInterpreterContext());
+        return this.progress;
       } else {
         return 0;
       }
@@ -319,13 +331,18 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
     return checkEmptyConfig && Strings.isNullOrEmpty(scriptText) && localProperties.isEmpty();
   }
 
+  public boolean execute(boolean blocking) {
+    return execute(null, blocking);
+  }
+
   /**
    * Return true only when paragraph run successfully with state of FINISHED.
    * @param blocking
    * @return
    */
-  public boolean execute(boolean blocking) {
+  public boolean execute(String interpreterGroupId, boolean blocking) {
     try {
+      this.interpreterGroupId = interpreterGroupId;
       this.interpreter = getBindedInterpreter();
       InterpreterSetting interpreterSetting = ((ManagedInterpreterGroup)
               interpreter.getInterpreterGroup()).getInterpreterSetting();
@@ -333,17 +350,23 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
               = interpreterSetting.getConfig(interpreter.getClassName());
       mergeConfig(config);
 
+      setStatus(Status.PENDING);
+
       if (shouldSkipRunParagraph()) {
         LOGGER.info("Skip to run blank paragraph. {}", getId());
         setStatus(Job.Status.FINISHED);
         return true;
       }
-      setStatus(Status.READY);
 
-      if (getConfig().get("enabled") == null || (Boolean) getConfig().get("enabled")) {
+      if (isEnabled()) {
         setAuthenticationInfo(getAuthenticationInfo());
         interpreter.getScheduler().submit(this);
+       } else {
+        LOGGER.info("Skip disabled paragraph. {}", getId());
+        setStatus(Job.Status.FINISHED);
+        return true;
       }
+
 
       if (blocking) {
         while (!getStatus().isCompleted()) {
@@ -371,6 +394,15 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
       setReturn(intpResult, e);
       setStatus(Job.Status.ERROR);
       return false;
+    }
+  }
+
+  @Override
+  public void setStatus(Status status) {
+    super.setStatus(status);
+    // reset interpreterGroupId when paragraph is completed.
+    if (status.isCompleted()) {
+      this.interpreterGroupId = null;
     }
   }
 
@@ -501,10 +533,13 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
   private InterpreterContext getInterpreterContext() {
     AngularObjectRegistry registry = null;
     ResourcePool resourcePool = null;
-
+    String replName = null;
     if (this.interpreter != null) {
       registry = this.interpreter.getInterpreterGroup().getAngularObjectRegistry();
       resourcePool = this.interpreter.getInterpreterGroup().getResourcePool();
+      InterpreterSetting interpreterSetting = ((ManagedInterpreterGroup)
+              interpreter.getInterpreterGroup()).getInterpreterSetting();
+      replName = interpreterSetting.getName();
     }
 
     Credentials credentials = note.getCredentials();
@@ -523,7 +558,7 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
             .setNoteId(note.getId())
             .setNoteName(note.getName())
             .setParagraphId(getId())
-            .setReplName(intpText)
+            .setReplName(replName)
             .setParagraphTitle(title)
             .setParagraphText(text)
             .setAuthenticationInfo(subject)
@@ -550,7 +585,7 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
   // NOTE: function setConfig(...) will overwrite all configuration
   // Merge configuration, you need to use function mergeConfig(...)
   public void setConfig(Map<String, Object> config) {
-    this.config = config;
+    this.config = Maps.newHashMap(config);
   }
 
   // [ZEPPELIN-3919] Paragraph config default value can be customized
@@ -565,6 +600,10 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
   //    Need to delete the existing configuration of this paragraph,
   //    update with the specified interpreter configuration
   public void mergeConfig(Map<String, Object> newConfig) {
+    this.config.putAll(newConfig);
+  }
+
+  public void updateConfig(Map<String, String> newConfig) {
     this.config.putAll(newConfig);
   }
 
@@ -693,6 +732,14 @@ public class Paragraph extends JobWithProgressPoller<InterpreterResult> implemen
   public void waitUntilFinished() throws Exception {
     while(!isTerminated()) {
       LOGGER.debug("Wait for paragraph to be finished");
+      Thread.sleep(1000);
+    }
+  }
+
+  @VisibleForTesting
+  public void waitUntilRunning() throws Exception {
+    while(!isRunning()) {
+      LOGGER.debug("Wait for paragraph to be running");
       Thread.sleep(1000);
     }
   }

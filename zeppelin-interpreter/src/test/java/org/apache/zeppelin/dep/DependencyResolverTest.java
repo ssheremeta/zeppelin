@@ -23,7 +23,7 @@ import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
-import org.sonatype.aether.RepositoryException;
+import org.eclipse.aether.RepositoryException;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -85,6 +85,14 @@ public class DependencyResolverTest {
         Collections.singletonList("org.scala-lang:scala-library"), testCopyPath);
     assertEquals(testCopyPath.list().length, 3);
     FileUtils.cleanDirectory(testCopyPath);
+
+    // load from added http repository
+    resolver.addRepo("httpmvn",
+        "http://insecure.repo1.maven.org/maven2/", false);
+    resolver.load("com.databricks:spark-csv_2.10:1.3.0", testCopyPath);
+    assertEquals(testCopyPath.list().length, 4);
+    FileUtils.cleanDirectory(testCopyPath);
+    resolver.delRepo("httpmvn");
 
     // load from added repository
     resolver.addRepo("sonatype",

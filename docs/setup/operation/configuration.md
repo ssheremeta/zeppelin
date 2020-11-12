@@ -270,6 +270,12 @@ If both are defined, then the **environment variables** will take priority.
       <td>Save notebooks to S3 with the given [Canned ACL](https://docs.aws.amazon.com/AWSJavaSDK/latest/javadoc/com/amazonaws/services/s3/model/CannedAccessControlList.html) which determines the S3 permissions.</td>
   </tr>
   <tr>
+      <td><h6 class="properties">ZEPPELIN_NOTEBOOK_S3_PATH_STYLE_ACCESS</h6></td>
+      <td><h6 class="properties">zeppelin.notebook.s3.pathStyleAccess</h6></td>
+      <td>false</td>
+      <td>Access S3 bucket using path style</td>
+  </tr>
+  <tr>
     <td><h6 class="properties">ZEPPELIN_NOTEBOOK_S3_SIGNEROVERRIDE</h6></td>
     <td><h6 class="properties">zeppelin.notebook.s3.signerOverride</h6></td>
     <td></td>
@@ -320,7 +326,7 @@ If both are defined, then the **environment variables** will take priority.
   <tr>
     <td><h6 class="properties">ZEPPELIN_INTERPRETER_DEP_MVNREPO</h6></td>
     <td><h6 class="properties">zeppelin.interpreter.dep.mvnRepo</h6></td>
-    <td>http://repo1.maven.org/maven2/</td>
+    <td>https://repo1.maven.org/maven2/</td>
     <td>Remote principal repository for interpreter's additional dependency loading</td>
   </tr>
   <tr>
@@ -430,6 +436,12 @@ If both are defined, then the **environment variables** will take priority.
     <td><h6 class="properties">zeppelin.k8s.service.name</h6></td>
     <td>zeppelin-server</td>
     <td>Name of the Zeppelin server service resources</td>
+  </tr>
+  <tr>
+    <td><h6 class="properties">ZEPPELIN_K8S_TIMEOUT_DURING_PENDING</h6></td>
+    <td><h6 class="properties">zeppelin.k8s.timeout.during.pending</h6></td>
+    <td>true</td>
+    <td>Value to enable/disable timeout handling when starting Interpreter Pods. Caution: This can lead to an infinity loop</td>
   </tr>
 </table>
 

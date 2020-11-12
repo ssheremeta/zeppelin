@@ -148,7 +148,7 @@ You can also add and set other flink properties which are not listed in the tabl
   <tr>
     <td>flink.udf.jars</td>
     <td></td>
-    <td>Flink udf jars (comma separated), zeppelin will register udf in this jar automatically for user. The udf name is the class name.</td>
+    <td>Flink udf jars (comma separated), zeppelin will register udf in this jar automatically for user. These udf jars could be either local files or hdfs files if you have hadoop installed. The udf name is the class name.</td>
   </tr>
   <tr>
     <td>flink.udf.jars.packages</td>
@@ -158,7 +158,7 @@ You can also add and set other flink properties which are not listed in the tabl
   <tr>
     <td>flink.execution.jars</td>
     <td></td>
-    <td>Additional user jars (comma separated)</td>
+    <td>Additional user jars (comma separated), these jars could be either local files or hdfs files if you have hadoop installed.</td>
   </tr>
   <tr>
     <td>flink.execution.packages</td>
@@ -220,6 +220,11 @@ You can also add and set other flink properties which are not listed in the tabl
     <td>`zeppelin.interpreter.close.cancel_job`</td>
     <td>true</td>
     <td>Whether cancel flink job when closing interpreter</td>
+  </tr>
+  <tr>
+    <td>`zeppelin.flink.job.check_interval`</td>
+    <td>1000</td>
+    <td>Check interval (in milliseconds) to check flink job progress</td>
   </tr>
 </table>
 
@@ -455,6 +460,21 @@ In this section, we will list and explain all the supported local properties in 
     <td>savepointDir</td>
     <td></td>
     <td>If you specify it, then when you cancel your flink job in Zeppelin, it would also do savepoint and store state in this directory. And when you resume your job, it would resume from this savepoint.</td>
+  </tr>
+  <tr>
+    <td>execution.savepoint.path</td>
+    <td></td>
+    <td>When you resume your job, it would resume from this savepoint path.</td>
+  </tr>
+  <tr>
+    <td>resumeFromSavepoint</td>
+    <td></td>
+    <td>Resume flink job from savepoint if you specify savepointDir.</td>
+  </tr>
+  <tr>
+    <td>resumeFromLatestCheckpoint</td>
+    <td></td>
+    <td>Resume flink job from latest checkpoint if you enable checkpoint.</td>
   </tr>
   <tr>
     <td>runAsOne</td>
