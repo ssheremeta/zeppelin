@@ -120,6 +120,7 @@ public class LivySparkSQLInterpreter extends BaseLivyInterpreter {
             truncate + ")";
       }
       InterpreterResult result = sparkInterpreter.interpret(sqlQuery, context);
+
       if (result.code() == InterpreterResult.Code.SUCCESS) {
         InterpreterResult result2 = new InterpreterResult(InterpreterResult.Code.SUCCESS);
         for (InterpreterResultMessage message : result.message()) {
@@ -191,7 +192,8 @@ public class LivySparkSQLInterpreter extends BaseLivyInterpreter {
         List<String> cells = new ArrayList<>();
         for (Pair pair : pairs) {
           // strip the blank space around the cell and escape the string
-          cells.add(escapeEcmaScript(line.substring(pair.start, pair.end)).trim());
+          //cells.add(escapeEcmaScript(line.substring(pair.start, pair.end)).trim());
+          cells.add(line.substring(pair.start, pair.end).trim());
         }
         rows.add(StringUtils.join(cells, "\t"));
       }

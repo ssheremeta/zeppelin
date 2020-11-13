@@ -58,6 +58,7 @@ public class LivyInterpreterIT {
     }
     cluster = Cluster$.MODULE$.get();
     LOGGER.info("Starting livy at {}", cluster.livyEndpoint());
+
     properties = new Properties();
     properties.setProperty("zeppelin.livy.url", cluster.livyEndpoint());
     properties.setProperty("zeppelin.livy.session.create_timeout", "120");
@@ -262,6 +263,7 @@ public class LivyInterpreterIT {
       assertTrue(result.message().get(0).getData()
           .contains("Array[org.apache.spark.sql.Row] = Array([hello,20])"));
     }
+
     sparkInterpreter.interpret("df.registerTempTable(\"df\")", context);
     // test LivySparkSQLInterpreter which share the same SparkContext with LivySparkInterpreter
     result = sqlInterpreter.interpret("select * from df where col_1='hello'", context);
@@ -285,6 +287,12 @@ public class LivyInterpreterIT {
     result = sqlInterpreter.interpret("select * from df where col_1=\"he'llo\"", context);
     assertEquals(result.toString(), InterpreterResult.Code.SUCCESS, result.code());
     assertEquals(InterpreterResult.Type.TABLE, result.message().get(0).getType());
+
+    // test utf-8 Encoding
+    String utf8Str = "мама мыла раму";
+    result = sqlInterpreter.interpret("select '" + utf8Str + "' as cyrillic from df", context);
+    assertEquals(result.toString(), InterpreterResult.Code.SUCCESS, result.code());
+    assertTrue(result.message().get(0).getData().contains(utf8Str));
 
     // test sql with syntax error
     result = sqlInterpreter.interpret("select * from df2", context);
@@ -349,7 +357,6 @@ public class LivyInterpreterIT {
     assertEquals(result.toString(), InterpreterResult.Code.SUCCESS, result.code());
     assertEquals(InterpreterResult.Type.TABLE, result.message().get(0).getType());
     assertEquals("col_1\tcol_2\n12characters12cha...\t20", result.message().get(0).getData());
-
   }
 
   @Test
