@@ -218,7 +218,8 @@ public class LivySparkSQLInterpreter extends BaseLivyInterpreter {
         List<String> cells = new ArrayList<>();
         for (Pair pair : pairs) {
           // strip the blank space around the cell and escape the string
-          cells.add(escapeJavaScript(line.substring(pair.start, pair.end)).trim());
+          //cells.add(escapeJavaScript(line.substring(pair.start, pair.end)).trim());
+          cells.add(line.substring(pair.start, pair.end).trim());
         }
         rows.add(StringUtils.join(cells, "\t"));
       }
